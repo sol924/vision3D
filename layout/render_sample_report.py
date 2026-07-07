@@ -12,6 +12,7 @@ import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+from matplotlib.collections import PolyCollection
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 from mpl_toolkits.mplot3d.art3d import Poly3DCollection
@@ -26,10 +27,15 @@ from layout import open_local_mesh, open_local_pointcloud
 
 GT_COLOR = "#1a8f3a"
 PRED_COLOR = "#e2552f"
-TEXT_DARK = "#1d252c"
-TEXT_MUTED = "#66717c"
+TEXT_DARK = "#000000"
 WHITE = "#ffffff"
 SCENE_BG = np.array([255, 255, 255], dtype=np.int16)
+LEFT_TEXT_SIZE = 25
+LEFT_LINE_STEP = 36
+SECTION_LABEL_GAP = 38
+SECTION_BOTTOM_GAP = 34
+LEGEND_ROW_GAP = 36
+LEGEND_HEIGHT = 78
 
 
 def parse_args() -> argparse.Namespace:
@@ -154,6 +160,151 @@ def downsample(points: np.ndarray, colors: np.ndarray, max_points: int) -> tuple
     return points[idx], colors[idx]
 
 
+def camera_basis(elev: float, azim: float) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    elev_rad = math.radians(elev)
+    azim_rad = math.radians(azim)
+    view_dir = np.array(
+        [
+            math.cos(elev_rad) * math.cos(azim_rad),
+            math.cos(elev_rad) * math.sin(azim_rad),
+            math.sin(elev_rad),
+        ],
+        dtype=np.float32,
+    )
+    view_dir /= max(float(np.linalg.norm(view_dir)), 1e-6)
+    world_up = np.array([0.0, 0.0, 1.0], dtype=np.float32)
+    right = np.cross(world_up, view_dir)
+    if float(np.linalg.norm(right)) < 1e-6:
+        right = np.array([1.0, 0.0, 0.0], dtype=np.float32)
+    right /= max(float(np.linalg.norm(right)), 1e-6)
+    up = np.cross(view_dir, right)
+    up /= max(float(np.linalg.norm(up)), 1e-6)
+    return right, up, view_dir
+
+
+def project_vertices(
+    vertices: np.ndarray,
+    center: np.ndarray,
+    basis: tuple[np.ndarray, np.ndarray, np.ndarray],
+) -> np.ndarray:
+    right, up, view_dir = (item.astype(np.float64) for item in basis)
+    rel = vertices.astype(np.float64, copy=False) - center.astype(np.float64, copy=False)
+    return np.stack(
+        (
+            np.einsum("...i,i->...", rel, right),
+            np.einsum("...i,i->...", rel, up),
+            np.einsum("...i,i->...", rel, view_dir),
+        ),
+        axis=-1,
+    )
+
+
+def expand_projected_limits(xy: np.ndarray, size: tuple[int, int]) -> tuple[float, float, float, float]:
+    width, height = size
+    x0, y0 = np.min(xy, axis=0)
+    x1, y1 = np.max(xy, axis=0)
+    x_span = max(float(x1 - x0), 1e-3)
+    y_span = max(float(y1 - y0), 1e-3)
+    target_aspect = width / height
+    data_aspect = x_span / y_span
+    if data_aspect > target_aspect:
+        new_y_span = x_span / target_aspect
+        pad = (new_y_span - y_span) / 2.0
+        y0 -= pad
+        y1 += pad
+    else:
+        new_x_span = y_span * target_aspect
+        pad = (new_x_span - x_span) / 2.0
+        x0 -= pad
+        x1 += pad
+    pad_x = (x1 - x0) * 0.045
+    pad_y = (y1 - y0) * 0.045
+    return float(x0 - pad_x), float(x1 + pad_x), float(y0 - pad_y), float(y1 + pad_y)
+
+
+def draw_projected_mesh_scene(
+    points: np.ndarray,
+    colors: np.ndarray,
+    faces: np.ndarray,
+    boxes: list[dict[str, Any]],
+    size: tuple[int, int],
+    elev: float,
+    azim: float,
+    max_points: int,
+) -> Image.Image | None:
+    mins, maxs = target_limits(points, boxes)
+    span = np.maximum(maxs - mins, 0.1)
+    center = (mins + maxs) / 2.0
+    max_span = float(np.max(span))
+    limits_min = center - max_span / 2.0
+    limits_max = center + max_span / 2.0
+
+    vertices_in_view = np.all((points >= limits_min) & (points <= limits_max), axis=1)
+    face_mask = vertices_in_view[faces].any(axis=1)
+    face_indices = np.flatnonzero(face_mask)
+    if len(face_indices) == 0:
+        return None
+
+    max_faces = max(120000, min(700000, max_points * 8))
+    if len(face_indices) > max_faces:
+        face_indices = face_indices[np.linspace(0, len(face_indices) - 1, max_faces, dtype=np.int64)]
+
+    selected_faces = faces[face_indices]
+    triangles = points[selected_faces]
+    face_colors = np.clip(colors[selected_faces].mean(axis=1).astype(np.float32) / 255.0, 0, 1)
+    basis = camera_basis(elev, azim)
+    projected = project_vertices(triangles.reshape(-1, 3), center, basis).reshape(-1, 3, 3)
+
+    projected_xy = projected[:, :, :2].reshape(-1, 2)
+    if boxes:
+        box_vertices = np.concatenate([bbox_corners(box["loc"]) for box in boxes], axis=0)
+        box_projected = project_vertices(box_vertices, center, basis)[:, :2]
+        projected_xy = np.concatenate((projected_xy, box_projected), axis=0)
+    x0, x1, y0, y1 = expand_projected_limits(projected_xy, size)
+
+    depth = projected[:, :, 2].mean(axis=1)
+    order = np.argsort(depth)
+    polygons = projected[order, :, :2]
+    face_colors = face_colors[order]
+
+    width, height = size
+    fig, ax = plt.subplots(figsize=(width / 160, height / 160), dpi=160)
+    fig.patch.set_facecolor(WHITE)
+    ax.set_facecolor(WHITE)
+    ax.set_position([0, 0, 1, 1])
+    mesh = PolyCollection(
+        polygons,
+        facecolors=face_colors,
+        edgecolors=face_colors,
+        linewidths=0.12,
+        antialiaseds=False,
+    )
+    ax.add_collection(mesh)
+
+    for box in boxes:
+        corners = bbox_corners(box["loc"])
+        projected_corners = project_vertices(corners, center, basis)
+        for start, end in bbox_edges():
+            ax.plot(
+                [projected_corners[start, 0], projected_corners[end, 0]],
+                [projected_corners[start, 1], projected_corners[end, 1]],
+                color=box["color"],
+                linewidth=box["width"],
+                solid_capstyle="round",
+            )
+
+    ax.set_xlim(x0, x1)
+    ax.set_ylim(y0, y1)
+    ax.set_aspect("equal")
+    ax.axis("off")
+
+    buffer = io.BytesIO()
+    fig.savefig(buffer, format="png", facecolor=fig.get_facecolor(), pad_inches=0)
+    plt.close(fig)
+    buffer.seek(0)
+    return Image.open(buffer).convert("RGB").resize(size, Image.Resampling.LANCZOS)
+
+
 def draw_matplotlib_scene(
     points: np.ndarray,
     colors: np.ndarray,
@@ -165,6 +316,20 @@ def draw_matplotlib_scene(
     faces: np.ndarray | None = None,
 ) -> Image.Image:
     width, height = size
+    if faces is not None and len(faces) > 0:
+        projected_mesh = draw_projected_mesh_scene(
+            points=points,
+            colors=colors,
+            faces=faces,
+            boxes=boxes,
+            size=size,
+            elev=elev,
+            azim=azim,
+            max_points=max_points,
+        )
+        if projected_mesh is not None:
+            return projected_mesh
+
     fig = plt.figure(figsize=(width / 160, height / 160), dpi=160)
     ax = fig.add_subplot(111, projection="3d")
     fig.patch.set_facecolor(WHITE)
@@ -269,7 +434,12 @@ def trim_scene_whitespace(image: Image.Image, padding: int = 34) -> Image.Image:
     return image.crop((x0, y0, x1 + 1, y1 + 1))
 
 
-def choose_camera(points: np.ndarray, colors: np.ndarray, boxes: list[dict[str, Any]]) -> dict[str, float]:
+def choose_camera(
+    points: np.ndarray,
+    colors: np.ndarray,
+    boxes: list[dict[str, Any]],
+    faces: np.ndarray | None = None,
+) -> dict[str, float]:
     candidates = [
         {"name": "front-right", "elev": 24.0, "azim": -54.0},
         {"name": "front-left", "elev": 24.0, "azim": 36.0},
@@ -288,6 +458,7 @@ def choose_camera(points: np.ndarray, colors: np.ndarray, boxes: list[dict[str, 
             elev=candidate["elev"],
             azim=candidate["azim"],
             max_points=22000,
+            faces=faces,
         )
         score = score_scene(image)
         if score > best["score"]:
@@ -398,18 +569,18 @@ def draw_section(
     body: str,
     accent: str,
 ) -> int:
-    label_font = font(23, bold=True)
-    body_font = font(25)
-    draw.text((x, y), label, fill=accent, font=label_font)
-    y += 38
+    label_font = font(LEFT_TEXT_SIZE, bold=True)
+    body_font = font(LEFT_TEXT_SIZE)
+    draw.text((x, y), label, fill=TEXT_DARK, font=label_font)
+    y += SECTION_LABEL_GAP
     lines = wrap_text(draw, body, body_font, width)
     for line in lines[:8]:
         draw.text((x, y), line, fill=TEXT_DARK, font=body_font)
-        y += 36
+        y += LEFT_LINE_STEP
     if len(lines) > 8:
-        draw.text((x, y), "...", fill=TEXT_MUTED, font=body_font)
-        y += 36
-    return y + 34
+        draw.text((x, y), "...", fill=TEXT_DARK, font=body_font)
+        y += LEFT_LINE_STEP
+    return y + SECTION_BOTTOM_GAP
 
 
 def measure_section_height(
@@ -418,25 +589,24 @@ def measure_section_height(
     body: str,
     max_lines: int = 8,
 ) -> int:
-    body_font = font(25)
+    body_font = font(LEFT_TEXT_SIZE)
     line_count = min(len(wrap_text(draw, body, body_font, width)), max_lines)
     ellipsis = 1 if len(wrap_text(draw, body, body_font, width)) > max_lines else 0
-    return 38 + (line_count + ellipsis) * 36 + 34
+    return SECTION_LABEL_GAP + (line_count + ellipsis) * LEFT_LINE_STEP + SECTION_BOTTOM_GAP
 
 
 def measure_legend_height() -> int:
-    return 62
+    return LEGEND_HEIGHT
 
 
 def draw_bbox_legend(draw: ImageDraw.ImageDraw, x: int, y: int) -> int:
-    legend_font = font(19)
+    legend_font = font(LEFT_TEXT_SIZE)
     line_w = 44
     text_gap = 14
-    row_gap = 28
     for idx, (color, label) in enumerate(((GT_COLOR, "GT bbox"), (PRED_COLOR, "Prediction bbox"))):
-        row_y = y + idx * row_gap
-        draw.line((x, row_y + 10, x + line_w, row_y + 10), fill=color, width=6)
-        draw.text((x + line_w + text_gap, row_y), label, fill=TEXT_MUTED, font=legend_font)
+        row_y = y + idx * LEGEND_ROW_GAP
+        draw.line((x, row_y + 14, x + line_w, row_y + 14), fill=color, width=6)
+        draw.text((x + line_w + text_gap, row_y), label, fill=TEXT_DARK, font=legend_font)
     return y + measure_legend_height()
 
 
@@ -496,7 +666,7 @@ def main() -> int:
 
     points, colors, faces, scene_kind, scene_path = load_scene(package, args.scene_mode)
     boxes = collect_boxes(package)
-    camera = choose_camera(points, colors, boxes)
+    camera = choose_camera(points, colors, boxes, faces if scene_kind == "mesh" else None)
     scene_size = (args.width - 620, args.height - 80)
     renderer_name = "matplotlib"
     scene_image = None

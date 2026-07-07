@@ -23,10 +23,11 @@ bounding boxes when metadata and annotation files are available.
 
 Reports should be paper-oriented: pure white background, no cards, no frames, no
 footer, and no extra metadata beyond Instruction, GT, PREDICTION, and a small bbox
-legend. The text block should be vertically centered relative to the mesh panel. Use
-green GT bboxes, orange prediction bboxes, and a camera angle that keeps the target
-object visible with surrounding context. Prefer Open3D offscreen rendering when
-available; otherwise use the Matplotlib fallback.
+legend. Use consistent black typography for the left text block, with colored line
+swatches only for the bbox legend. The text block should be vertically centered
+relative to the mesh panel. Use green GT bboxes, orange prediction bboxes, and a camera
+angle that keeps the target object visible with surrounding context. Prefer Open3D
+offscreen rendering when available; otherwise use the Matplotlib mesh fallback.
 
 ## Metadata Contract
 
