@@ -11,9 +11,10 @@ visualization-ready artifacts.
 - `visualize_sample_objects.py`: builds an aligned point-cloud PLY for one annotation
   sample, highlighting token objects, the GT object, or both. It also writes a PNG
   preview and JSON metadata containing prompt, GT id, token ids, and output paths.
-- `visualize_input_tokens_mesh.py`: builds a colored ScanNet mesh showing the object
-  slots that become visual tokens. It writes mesh PLY, PNG preview, vertex labels, and
-  JSON metadata.
+- `visualize_input_tokens_mesh.py`: builds a ScanNet mesh with preserved faces. Use
+  `--color-mode none --background-mode original` for paper reports so objects keep
+  their original scene colors; use `palette` or `uniform_red` only for debugging token
+  coverage. It writes mesh PLY, PNG preview, vertex labels, and JSON metadata.
 - `render_sample_package.py`: validates one annotation sample against model predictions
   and writes a complete point/mesh package with input text, GT answer, model prediction,
   bbox metadata, previews, and optional HTML viewers.
@@ -33,8 +34,9 @@ visualization-ready artifacts.
 ## Outputs
 
 Use `outputs/visualizations/` for point-cloud overlays and
-`outputs/visualizations_mesh/` for mesh overlays unless a command passes a different
-`--output-dir`.
+`outputs/visualizations_mesh/` for mesh artifacts unless a command passes a different
+`--output-dir`. Paper-style report meshes should not recolor objects; bbox lines carry
+the GT/prediction annotation.
 
 Do not commit generated PLY, PNG, JSON, HTML, or vertex-label outputs unless the user
 explicitly asks for them.

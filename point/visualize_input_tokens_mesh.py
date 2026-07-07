@@ -15,8 +15,8 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
             "High-quality mesh visualization for the visual tokens actually fed into the model. "
-            "This follows the ScanNet official mesh-coloring style: full mesh vertices are recolored "
-            "while faces are preserved."
+            "This follows the ScanNet official mesh style: full mesh faces are preserved, with "
+            "optional vertex recoloring for token objects."
         )
     )
     parser.add_argument("--annotation-root", required=True, help="Annotation root directory.")
@@ -55,14 +55,14 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--color-mode",
-        choices=("uniform_red", "palette"),
-        default="palette",
-        help="How to color the input-token objects.",
+        choices=("none", "uniform_red", "palette"),
+        default="none",
+        help="How to color the input-token objects. Use none to preserve original scene colors.",
     )
     parser.add_argument(
         "--background-mode",
         choices=("dimmed", "original"),
-        default="dimmed",
+        default="original",
         help="Use dimmed scene colors or the original mesh colors for non-highlighted vertices.",
     )
     parser.add_argument(
@@ -224,6 +224,12 @@ def color_vertices_for_input_tokens(
     else:
         output_colors = np.clip(base_colors.astype(np.float32) * 0.45 + 20, 0, 255).astype(np.uint8)
     vertex_labels = np.zeros(len(points), dtype=np.int32)
+    if color_mode == "none":
+        return output_colors, vertex_labels, {
+            "input_token_object_count": len(token_object_ids),
+            "object_point_counts": {},
+            "object_colors": {},
+        }
 
     palette = (
         np.tile(np.array([[255, 80, 80]], dtype=np.uint8), (len(token_object_ids), 1))

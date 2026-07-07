@@ -220,9 +220,9 @@ def main() -> int:
             "--bbox-scale",
             str(args.bbox_scale),
             "--color-mode",
-            "palette",
+            "none",
             "--background-mode",
-            "dimmed",
+            "original",
             "--output-dir",
             str(mesh_dir),
         ]
