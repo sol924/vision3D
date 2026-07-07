@@ -28,10 +28,10 @@ matching Python module.
 - `bash run/render_ours_dataset_grids.sh ...`: renders 12 correct samples for each dataset in
   `/Volumes/T7 Shield/point_reduction_data/ours/<prediction-run>`, creates per-sample
   paper tiles, and stitches one 2x6 PNG grid per dataset. It defaults to
-  `--text-preset a4-2x6 --font-family times` for A4 paper readability. Use
-  `--datasets scanqa` to run one dataset, `--limit 1 --cols 1 --rows 1` for a smoke
-  test, and `--no-download` when missing ScanNet scenes should fail instead of being
-  downloaded.
+  `--width 3200 --height 1500 --text-preset a4-2x6 --font-family times` for A4 paper
+  readability, complete text, and one-line bbox legends. Use `--datasets scanqa` to
+  run one dataset, `--limit 1 --cols 1 --rows 1` for a smoke test, and `--no-download`
+  when missing ScanNet scenes should fail instead of being downloaded.
 
 ## Typical Usage
 

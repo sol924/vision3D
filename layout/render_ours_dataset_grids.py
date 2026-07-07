@@ -67,8 +67,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--limit", type=int, default=12)
     parser.add_argument("--cols", type=int, default=2)
     parser.add_argument("--rows", type=int, default=6)
-    parser.add_argument("--width", type=int, default=2400)
-    parser.add_argument("--height", type=int, default=1100)
+    parser.add_argument("--width", type=int, default=3200)
+    parser.add_argument("--height", type=int, default=1500)
     parser.add_argument("--renderer", choices=("auto", "open3d", "matplotlib"), default="matplotlib")
     parser.add_argument("--text-preset", choices=("compact", "a4-grid", "a4-2x6"), default="a4-2x6")
     parser.add_argument("--font-family", choices=("times", "arial"), default="times")
@@ -156,6 +156,49 @@ def is_prediction_correct(dataset_name: str, prediction: dict) -> bool:
     if dataset_name == "scan2cap":
         return int(prediction.get("pred_id", -1)) == int(prediction.get("gt_id", -2))
     return False
+
+
+def gt_answer_for_score(dataset_name: str, sample: dict) -> str:
+    answers = sample.get("ref_captions", [])
+    if dataset_name == "multi3dref":
+        if not answers:
+            return "No."
+        return ", ".join(f"<OBJ{int(item):03d}>" for item in answers)
+    if not isinstance(answers, list):
+        return str(answers)
+    if dataset_name == "scan2cap" and answers:
+        return str(answers[0])
+    return ", ".join(str(item) for item in answers)
+
+
+def rough_line_count(text: Any, chars_per_line: int = 42) -> int:
+    normalized = " ".join(str(text).split())
+    if not normalized:
+        return 1
+    words = normalized.split()
+    lines = 1
+    current = 0
+    for word in words:
+        word_len = len(word)
+        if current == 0:
+            current = word_len
+        elif current + 1 + word_len <= chars_per_line:
+            current += 1 + word_len
+        else:
+            lines += 1
+            current = word_len
+    return lines
+
+
+def text_layout_score(dataset_name: str, sample: dict, prediction: dict) -> tuple[int, int, int]:
+    texts = [
+        sample.get("prompt", ""),
+        gt_answer_for_score(dataset_name, sample),
+        prediction.get("pred", ""),
+    ]
+    line_counts = [rough_line_count(text) for text in texts]
+    char_count = sum(len(" ".join(str(text).split())) for text in texts)
+    return max(line_counts), sum(line_counts), char_count
 
 
 def resolve_annotation_index(
@@ -272,19 +315,19 @@ def select_records(
     correct_only: bool,
 ) -> list[dict]:
     scan2cap_lookup = build_scan2cap_lookup(annotations) if dataset_name == "scan2cap" else {}
-    local_records: list[dict] = []
-    remote_records: list[dict] = []
-    seen_scenes: set[str] = set()
+    candidates: list[dict] = []
     for prediction_order, prediction in enumerate(predictions):
         is_correct = is_prediction_correct(dataset_name, prediction)
         if correct_only and not is_correct:
             continue
         scene_id = str(prediction.get("scene_id", ""))
-        if not scene_id or scene_id in seen_scenes:
+        if not scene_id:
             continue
         annotation_index = resolve_annotation_index(dataset_name, prediction, annotations, scan2cap_lookup)
         if annotation_index is None:
             continue
+        sample = annotations[annotation_index]
+        is_local = scene_available_locally(scene_id, scene_root, scene_sources)
         record = {
             "dataset": dataset_name,
             "annotation_index": annotation_index,
@@ -293,19 +336,33 @@ def select_records(
             "eval_name_index": prediction.get("eval_name_index"),
             "prediction": prediction,
             "is_correct": is_correct,
+            "is_scene_local": is_local,
+            "text_score": text_layout_score(dataset_name, sample, prediction),
         }
-        if scene_available_locally(scene_id, scene_root, scene_sources):
-            local_records.append(record)
-        else:
-            remote_records.append(record)
-        seen_scenes.add(scene_id)
-        if len(local_records) >= limit:
+        candidates.append(record)
+
+    candidates.sort(key=lambda item: (not item["is_scene_local"], item["text_score"], item["prediction_order"]))
+    selected: list[dict] = []
+    selected_keys: set[int] = set()
+    seen_scenes: set[str] = set()
+    for record in candidates:
+        if record["scene_id"] in seen_scenes:
+            continue
+        selected.append(record)
+        selected_keys.add(record["prediction_order"])
+        seen_scenes.add(record["scene_id"])
+        if len(selected) >= limit:
             break
-    selected = local_records[:limit]
     if len(selected) < limit:
-        selected.extend(remote_records[: limit - len(selected)])
+        for record in candidates:
+            if record["prediction_order"] in selected_keys:
+                continue
+            selected.append(record)
+            selected_keys.add(record["prediction_order"])
+            if len(selected) >= limit:
+                break
     if len(selected) < limit:
-        label = "correct distinct-scene" if correct_only else "distinct-scene"
+        label = "correct" if correct_only else "available"
         raise RuntimeError(f"{dataset_name}: only selected {len(selected)} {label} samples.")
     return selected
 

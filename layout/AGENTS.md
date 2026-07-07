@@ -22,9 +22,9 @@ bounding boxes when metadata and annotation files are available.
   then writes an `index.html` gallery for browsing multiple samples.
 - `render_ours_dataset_grids.py`: renders the five `ours/<prediction-run>` datasets
   (`scanrefer`, `multi3dref`, `scan2cap`, `scanqa`, `sqa3d`) into 12-sample 2x6 PNG
-  grids using correctly predicted samples by default. It copies local ScanNet scenes
-  when available, downloads missing ScanNet files into the requested output directory,
-  renders per-sample tiles, and stitches one large figure per dataset.
+  grids using correctly predicted samples by default. It prioritizes cached scenes and
+  shorter complete text among correct samples, renders per-sample tiles, and stitches
+  one large figure per dataset.
 
 ## Static Report Style
 
@@ -37,7 +37,8 @@ recolor objects for paper reports. Use green GT bboxes, orange prediction bboxes
 camera angle that keeps the target object visible with surrounding context. Prefer
 Open3D offscreen rendering when available; otherwise use the Matplotlib mesh fallback.
 For A4 dataset grids, use Times-style text with the `a4-2x6` preset so text remains
-legible after the 2x6 image is scaled to the page.
+legible after the 2x6 image is scaled to the page. Do not truncate report text with
+ellipsis for this preset; keep the GT/prediction bbox legend on one line.
 
 ## Metadata Contract
 

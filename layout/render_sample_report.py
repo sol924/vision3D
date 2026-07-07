@@ -36,6 +36,7 @@ SCENE_BG = np.array([255, 255, 255], dtype=np.int16)
 @dataclass(frozen=True)
 class ReportStyle:
     text_size: int
+    min_text_size: int
     line_step: int
     section_label_gap: int
     section_bottom_gap: int
@@ -57,6 +58,7 @@ class ReportStyle:
 STYLE_PRESETS = {
     "compact": {
         "text_size": 25,
+        "min_text_size": 20,
         "line_step": 36,
         "section_label_gap": 38,
         "section_bottom_gap": 34,
@@ -75,6 +77,7 @@ STYLE_PRESETS = {
     },
     "a4-grid": {
         "text_size": 62,
+        "min_text_size": 46,
         "line_step": 70,
         "section_label_gap": 68,
         "section_bottom_gap": 34,
@@ -93,16 +96,17 @@ STYLE_PRESETS = {
     },
     "a4-2x6": {
         "text_size": 78,
+        "min_text_size": 54,
         "line_step": 84,
         "section_label_gap": 70,
-        "section_bottom_gap": 18,
+        "section_bottom_gap": 22,
         "legend_row_gap": 84,
-        "legend_base_height": 84,
+        "legend_base_height": 92,
         "left_x": 70,
-        "text_w": 1040,
-        "right_x": 1180,
+        "text_w": 1340,
+        "right_x": 1500,
         "right_y": 40,
-        "right_margin": 40,
+        "right_margin": 50,
         "bottom_margin": 40,
         "legend_line_w": 112,
         "legend_text_gap": 28,
@@ -676,6 +680,32 @@ def build_style(text_preset: str, font_family: str) -> ReportStyle:
     return ReportStyle(**spec)
 
 
+def resize_style(style: ReportStyle, text_size: int) -> ReportStyle:
+    if text_size == style.text_size:
+        return style
+    scale = text_size / style.text_size
+    return ReportStyle(
+        text_size=text_size,
+        min_text_size=style.min_text_size,
+        line_step=max(text_size + 6, int(round(style.line_step * scale))),
+        section_label_gap=max(text_size + 4, int(round(style.section_label_gap * scale))),
+        section_bottom_gap=max(10, int(round(style.section_bottom_gap * scale))),
+        legend_row_gap=max(text_size + 6, int(round(style.legend_row_gap * scale))),
+        legend_base_height=max(text_size + 14, int(round(style.legend_base_height * scale))),
+        left_x=style.left_x,
+        text_w=style.text_w,
+        right_x=style.right_x,
+        right_y=style.right_y,
+        right_margin=style.right_margin,
+        bottom_margin=style.bottom_margin,
+        legend_line_w=max(48, int(round(style.legend_line_w * scale))),
+        legend_text_gap=max(12, int(round(style.legend_text_gap * scale))),
+        legend_line_width=max(4, int(round(style.legend_line_width * scale))),
+        legend_line_y=max(8, int(round(style.legend_line_y * scale))),
+        font_family=style.font_family,
+    )
+
+
 def font(size: int, bold: bool = False, family: str = "times") -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
     candidates = FONT_CANDIDATES[family][bold]
     if family != "times":
@@ -715,18 +745,14 @@ def draw_section(
     body: str,
     accent: str,
     style: ReportStyle,
-    max_lines: int,
 ) -> int:
     label_font = font(style.text_size, bold=True, family=style.font_family)
     body_font = font(style.text_size, family=style.font_family)
     draw.text((x, y), label, fill=TEXT_DARK, font=label_font)
     y += style.section_label_gap
     lines = wrap_text(draw, body, body_font, width)
-    for line in lines[:max_lines]:
+    for line in lines:
         draw.text((x, y), line, fill=TEXT_DARK, font=body_font)
-        y += style.line_step
-    if len(lines) > max_lines:
-        draw.text((x, y), "...", fill=TEXT_DARK, font=body_font)
         y += style.line_step
     return y + style.section_bottom_gap
 
@@ -736,13 +762,10 @@ def measure_section_height(
     width: int,
     body: str,
     style: ReportStyle,
-    max_lines: int = 8,
 ) -> int:
     body_font = font(style.text_size, family=style.font_family)
     lines = wrap_text(draw, body, body_font, width)
-    line_count = min(len(lines), max_lines)
-    ellipsis = 1 if len(lines) > max_lines else 0
-    return style.section_label_gap + (line_count + ellipsis) * style.line_step + style.section_bottom_gap
+    return style.section_label_gap + len(lines) * style.line_step + style.section_bottom_gap
 
 
 def measure_legend_height(style: ReportStyle, item_count: int = 2) -> int:
@@ -759,21 +782,50 @@ def draw_bbox_legend(
     style: ReportStyle,
 ) -> int:
     legend_font = font(style.text_size, family=style.font_family)
-    for idx, (color, label) in enumerate(items):
-        row_y = y + idx * style.legend_row_gap
-        line_y = row_y + style.legend_line_y
+    cursor_x = x
+    for color, label in items:
+        line_y = y + style.legend_line_y
         draw.line(
-            (x, line_y, x + style.legend_line_w, line_y),
+            (cursor_x, line_y, cursor_x + style.legend_line_w, line_y),
             fill=color,
             width=style.legend_line_width,
         )
         draw.text(
-            (x + style.legend_line_w + style.legend_text_gap, row_y),
+            (cursor_x + style.legend_line_w + style.legend_text_gap, y),
             label,
             fill=TEXT_DARK,
             font=legend_font,
         )
+        label_w = draw.textlength(label, font=legend_font)
+        cursor_x += int(style.legend_line_w + style.legend_text_gap + label_w + style.legend_line_w * 0.55)
     return y + measure_legend_height(style, len(items))
+
+
+def text_block_height(
+    draw: ImageDraw.ImageDraw,
+    text_w: int,
+    sections: list[tuple[str, str, str]],
+    legend_items: list[tuple[str, str]],
+    style: ReportStyle,
+) -> int:
+    return (
+        sum(measure_section_height(draw, text_w, body, style) for _label, body, _accent in sections)
+        + measure_legend_height(style, len(legend_items))
+    )
+
+
+def fit_text_style(
+    draw: ImageDraw.ImageDraw,
+    text_w: int,
+    right_h: int,
+    sections: list[tuple[str, str, str]],
+    legend_items: list[tuple[str, str]],
+    style: ReportStyle,
+) -> ReportStyle:
+    fitted = style
+    while text_block_height(draw, text_w, sections, legend_items, fitted) > right_h and fitted.text_size > fitted.min_text_size:
+        fitted = resize_style(style, max(fitted.min_text_size, fitted.text_size - 2))
+    return fitted
 
 
 def render_report(
@@ -799,21 +851,17 @@ def render_report(
 
     gt_text = ", ".join(package.get("gt_answer", []))
     pred_text = package.get("model_prediction", "")
-    instruction_max_lines = 3 if style.text_size >= 75 else 4 if style.text_size >= 60 else 8
-    answer_max_lines = 1 if style.text_size >= 75 else 2 if style.text_size >= 60 else 8
     sections = [
-        ("Instruction", package.get("input_text", ""), "#2f5f87", instruction_max_lines),
-        ("GT", gt_text, GT_COLOR, answer_max_lines),
-        ("PREDICTION", pred_text, PRED_COLOR, answer_max_lines),
+        ("Instruction", package.get("input_text", ""), "#2f5f87"),
+        ("GT", gt_text, GT_COLOR),
+        ("PREDICTION", pred_text, PRED_COLOR),
     ]
     legend_items = collect_legend_items(package)
-    total_text_h = (
-        sum(measure_section_height(draw, text_w, body, style, max_lines) for _label, body, _accent, max_lines in sections)
-        + measure_legend_height(style, len(legend_items))
-    )
+    style = fit_text_style(draw, text_w, right_h, sections, legend_items, style)
+    total_text_h = text_block_height(draw, text_w, sections, legend_items, style)
     y = right_y + max((right_h - total_text_h) // 2, 0)
-    for label, body, accent, max_lines in sections:
-        y = draw_section(draw, left_x, y, text_w, label, body, accent, style, max_lines)
+    for label, body, accent in sections:
+        y = draw_section(draw, left_x, y, text_w, label, body, accent, style)
     draw_bbox_legend(draw, left_x, y - 4, legend_items, style)
 
     scene = trim_scene_whitespace(scene_image).resize((right_w, right_h), Image.Resampling.LANCZOS)

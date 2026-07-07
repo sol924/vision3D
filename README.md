@@ -56,4 +56,5 @@ PYTHON=/Users/sol/Research/Training_Free_Token_Redcution/.venv/bin/python \
 The default output directory is
 `/Volumes/T7 Shield/point_reduction_data/ours/visualization_0625_best_02`.
 This command uses the `a4-2x6` text preset and Times-style font by default so each
-dataset grid can be placed on an A4 paper page more clearly.
+dataset grid can be placed on an A4 paper page more clearly. The default tile size is
+`3200x1500`, producing `6400x9000` grids with complete text and one-line bbox legends.
