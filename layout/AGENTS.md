@@ -14,16 +14,17 @@ bounding boxes when metadata and annotation files are available.
 - `render_candidate_bbox_samples.py`: renders a small batch of candidate ScanRefer
   samples with original-color meshes, bbox previews, HTML viewers, and a manifest.
 - `render_sample_report.py`: renders a static left-text/right-scene PNG report from a
-  `sample_package.json` file. The left side shows input, GT, and prediction; the right
-  side shows the selected point/mesh scene with GT and prediction bboxes.
+  `sample_package.json` file. The left side shows only Instruction, GT, and
+  PREDICTION; the right side shows mesh visualization with GT and prediction bboxes.
 
 ## Static Report Style
 
-Reports should be inspection-oriented: high contrast text, restrained neutral
-backgrounds, green GT bboxes, orange prediction bboxes, and a camera angle that keeps
-the target object visible with surrounding context. Prefer Open3D offscreen rendering
-when available; otherwise use the Matplotlib fallback and record the renderer in the
-report footer.
+Reports should be paper-oriented: pure white background, no cards, no frames, no
+footer, and no extra metadata beyond Instruction, GT, and PREDICTION. The text block
+should be vertically centered relative to the mesh panel. Use green GT bboxes, orange
+prediction bboxes, and a camera angle that keeps the target object visible with
+surrounding context. Prefer Open3D offscreen rendering when available; otherwise use
+the Matplotlib fallback.
 
 ## Metadata Contract
 

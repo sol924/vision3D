@@ -5,7 +5,6 @@ import io
 import json
 import math
 import sys
-import textwrap
 from pathlib import Path
 from typing import Any
 
@@ -15,6 +14,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
+from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -28,9 +28,8 @@ GT_COLOR = "#1a8f3a"
 PRED_COLOR = "#e2552f"
 TEXT_DARK = "#1d252c"
 TEXT_MUTED = "#66717c"
-PAPER = "#f5f3ee"
-PANEL = "#ffffff"
-LINE = "#dad7cf"
+WHITE = "#ffffff"
+SCENE_BG = np.array([255, 255, 255], dtype=np.int16)
 
 
 def parse_args() -> argparse.Namespace:
@@ -48,8 +47,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--scene-mode",
         choices=("auto", "mesh", "point"),
-        default="auto",
-        help="Which generated scene artifact to render.",
+        default="mesh",
+        help="Which generated scene artifact to render. Defaults to mesh for paper figures.",
     )
     parser.add_argument("--max-points", type=int, default=80000, help="Maximum rendered points.")
     parser.add_argument(
@@ -70,19 +69,19 @@ def resolve_path(path_str: str) -> Path:
     return path if path.is_absolute() else (REPO_ROOT / path).resolve()
 
 
-def load_scene(package: dict, scene_mode: str) -> tuple[np.ndarray, np.ndarray, str, Path]:
+def load_scene(package: dict, scene_mode: str) -> tuple[np.ndarray, np.ndarray, np.ndarray | None, str, Path]:
     mode = scene_mode
     if mode == "auto":
-        mode = "mesh" if package.get("mesh_outputs", {}).get("mesh_ply") else "point"
+        mode = "mesh"
 
     if mode == "mesh":
         path = resolve_path(package["mesh_outputs"]["mesh_ply"])
-        points, colors, _faces = open_local_mesh.load_ascii_mesh_ply(path)
-        return points, colors, "mesh", path
+        points, colors, faces = open_local_mesh.load_ascii_mesh_ply(path)
+        return points, colors, faces, "mesh", path
 
     path = resolve_path(package["point_outputs"]["overlay_ply"])
     points, colors = open_local_pointcloud.load_ascii_ply(path)
-    return points, colors, "point", path
+    return points, colors, None, "point", path
 
 
 def bbox_corners(loc: list[float]) -> np.ndarray:
@@ -163,14 +162,13 @@ def draw_matplotlib_scene(
     elev: float,
     azim: float,
     max_points: int,
+    faces: np.ndarray | None = None,
 ) -> Image.Image:
-    points_small, colors_small = downsample(points, colors, max_points)
-    colors_float = np.clip(colors_small.astype(np.float32) / 255.0, 0, 1)
     width, height = size
     fig = plt.figure(figsize=(width / 160, height / 160), dpi=160)
     ax = fig.add_subplot(111, projection="3d")
-    fig.patch.set_facecolor("#f7f6f2")
-    ax.set_facecolor("#f7f6f2")
+    fig.patch.set_facecolor(WHITE)
+    ax.set_facecolor(WHITE)
 
     mins, maxs = target_limits(points, boxes)
     span = np.maximum(maxs - mins, 0.1)
@@ -179,15 +177,41 @@ def draw_matplotlib_scene(
     limits_min = center - max_span / 2.0
     limits_max = center + max_span / 2.0
 
-    ax.scatter(
-        points_small[:, 0],
-        points_small[:, 1],
-        points_small[:, 2],
-        c=colors_float,
-        s=0.16,
-        linewidths=0,
-        depthshade=False,
-    )
+    rendered_mesh = False
+    if faces is not None and len(faces) > 0:
+        vertices_in_view = np.all((points >= limits_min) & (points <= limits_max), axis=1)
+        face_mask = vertices_in_view[faces].any(axis=1)
+        face_indices = np.flatnonzero(face_mask)
+        max_faces = max(80000, min(240000, max_points * 3))
+        if len(face_indices) > max_faces:
+            face_indices = face_indices[np.linspace(0, len(face_indices) - 1, max_faces, dtype=np.int64)]
+        selected_faces = faces[face_indices]
+        if len(selected_faces) > 0:
+            triangles = points[selected_faces]
+            face_colors = np.clip(colors[selected_faces].mean(axis=1).astype(np.float32) / 255.0, 0, 1)
+            mesh = Poly3DCollection(
+                triangles,
+                facecolors=face_colors,
+                edgecolors="none",
+                linewidths=0.0,
+                alpha=1.0,
+            )
+            ax.add_collection3d(mesh)
+            rendered_mesh = True
+
+    if not rendered_mesh:
+        points_small, colors_small = downsample(points, colors, max_points)
+        colors_float = np.clip(colors_small.astype(np.float32) / 255.0, 0, 1)
+        ax.scatter(
+            points_small[:, 0],
+            points_small[:, 1],
+            points_small[:, 2],
+            c=colors_float,
+            s=0.16,
+            linewidths=0,
+            depthshade=False,
+        )
+
     for box in boxes:
         corners = bbox_corners(box["loc"])
         for start, end in bbox_edges():
@@ -218,8 +242,7 @@ def draw_matplotlib_scene(
 
 def score_scene(image: Image.Image) -> float:
     arr = np.asarray(image.convert("RGB"), dtype=np.int16)
-    bg = np.array([247, 246, 242], dtype=np.int16)
-    diff = np.abs(arr - bg).sum(axis=2)
+    diff = np.abs(arr - SCENE_BG).sum(axis=2)
     occupied = diff > 34
     coverage = occupied.mean()
     green = (arr[:, :, 1] > 105) & (arr[:, :, 0] < 90)
@@ -232,8 +255,7 @@ def score_scene(image: Image.Image) -> float:
 
 def trim_scene_whitespace(image: Image.Image, padding: int = 34) -> Image.Image:
     arr = np.asarray(image.convert("RGB"), dtype=np.int16)
-    bg = np.array([247, 246, 242], dtype=np.int16)
-    diff = np.abs(arr - bg).sum(axis=2)
+    diff = np.abs(arr - SCENE_BG).sum(axis=2)
     mask = diff > 34
     if not mask.any():
         return image
@@ -276,6 +298,7 @@ def choose_camera(points: np.ndarray, colors: np.ndarray, boxes: list[dict[str, 
 def try_render_open3d(
     points: np.ndarray,
     colors: np.ndarray,
+    faces: np.ndarray | None,
     boxes: list[dict[str, Any]],
     size: tuple[int, int],
     camera: dict[str, float],
@@ -288,15 +311,22 @@ def try_render_open3d(
     try:
         width, height = size
         renderer = o3d.visualization.rendering.OffscreenRenderer(width, height)
-        renderer.scene.set_background([0.969, 0.965, 0.949, 1.0])
+        renderer.scene.set_background([1.0, 1.0, 1.0, 1.0])
 
         material = o3d.visualization.rendering.MaterialRecord()
         material.shader = "defaultUnlit"
-        material.point_size = 2.0
-        pcd = o3d.geometry.PointCloud()
-        pcd.points = o3d.utility.Vector3dVector(points.astype(np.float64))
-        pcd.colors = o3d.utility.Vector3dVector(np.clip(colors.astype(np.float64) / 255.0, 0, 1))
-        renderer.scene.add_geometry("scene_points", pcd, material)
+        if faces is not None and len(faces) > 0:
+            mesh = o3d.geometry.TriangleMesh()
+            mesh.vertices = o3d.utility.Vector3dVector(points.astype(np.float64))
+            mesh.triangles = o3d.utility.Vector3iVector(faces.astype(np.int32))
+            mesh.vertex_colors = o3d.utility.Vector3dVector(np.clip(colors.astype(np.float64) / 255.0, 0, 1))
+            renderer.scene.add_geometry("scene_mesh", mesh, material)
+        else:
+            material.point_size = 2.0
+            pcd = o3d.geometry.PointCloud()
+            pcd.points = o3d.utility.Vector3dVector(points.astype(np.float64))
+            pcd.colors = o3d.utility.Vector3dVector(np.clip(colors.astype(np.float64) / 255.0, 0, 1))
+            renderer.scene.add_geometry("scene_points", pcd, material)
 
         line_material = o3d.visualization.rendering.MaterialRecord()
         line_material.shader = "unlitLine"
@@ -368,18 +398,30 @@ def draw_section(
     body: str,
     accent: str,
 ) -> int:
-    label_font = font(22, bold=True)
-    body_font = font(24)
-    draw.text((x, y), label.upper(), fill=accent, font=label_font)
-    y += 34
+    label_font = font(23, bold=True)
+    body_font = font(25)
+    draw.text((x, y), label, fill=accent, font=label_font)
+    y += 38
     lines = wrap_text(draw, body, body_font, width)
-    for line in lines[:10]:
+    for line in lines[:8]:
         draw.text((x, y), line, fill=TEXT_DARK, font=body_font)
-        y += 34
-    if len(lines) > 10:
+        y += 36
+    if len(lines) > 8:
         draw.text((x, y), "...", fill=TEXT_MUTED, font=body_font)
-        y += 34
-    return y + 30
+        y += 36
+    return y + 34
+
+
+def measure_section_height(
+    draw: ImageDraw.ImageDraw,
+    width: int,
+    body: str,
+    max_lines: int = 8,
+) -> int:
+    body_font = font(25)
+    line_count = min(len(wrap_text(draw, body, body_font, width)), max_lines)
+    ellipsis = 1 if len(wrap_text(draw, body, body_font, width)) > max_lines else 0
+    return 38 + (line_count + ellipsis) * 36 + 34
 
 
 def render_report(
@@ -392,50 +434,31 @@ def render_report(
     scene_kind: str,
 ) -> None:
     width, height = size
-    canvas = Image.new("RGB", size, PAPER)
+    canvas = Image.new("RGB", size, WHITE)
     draw = ImageDraw.Draw(canvas)
 
-    left_w = 560
-    margin = 42
-    draw.rounded_rectangle((28, 28, left_w + 28, height - 28), radius=8, fill=PANEL, outline=LINE, width=1)
-    title_font = font(38, bold=True)
-    meta_font = font(20)
-    draw.text((margin, 52), "vision3D Sample", fill=TEXT_DARK, font=title_font)
-    draw.text(
-        (margin, 102),
-        f"{package.get('scene_id')}  |  sample {int(package.get('sample_index', 0)):05d}",
-        fill=TEXT_MUTED,
-        font=meta_font,
-    )
-    draw.line((margin, 142, left_w - 6, 142), fill=LINE, width=2)
-
-    y = 172
-    text_w = left_w - margin - 28
-    y = draw_section(draw, margin, y, text_w, "Input", package.get("input_text", ""), "#2f5f87")
-    gt_text = f"Answer: {', '.join(package.get('gt_answer', []))}\nObject ID: {package.get('gt_object_id')}"
-    y = draw_section(draw, margin, y, text_w, "GT", gt_text, GT_COLOR)
-    pred_ids = ", ".join(f"OBJ{int(item):03d}" for item in package.get("model_pred_object_ids", [])) or "N/A"
-    pred_text = f"Answer: {package.get('model_prediction', '')}\nObject IDs: {pred_ids}"
-    y = draw_section(draw, margin, y, text_w, "Prediction", pred_text, PRED_COLOR)
-
-    foot_font = font(17)
-    foot = (
-        f"Renderer: {renderer_name} | Scene: {scene_kind} | "
-        f"View: {camera['name']} elev={camera['elev']:.0f}, azim={camera['azim']:.0f}"
-    )
-    draw.text((margin, height - 106), "Green = GT bbox", fill=TEXT_MUTED, font=foot_font)
-    draw.text((margin, height - 82), "Orange = model prediction bbox", fill=TEXT_MUTED, font=foot_font)
-    footer_lines = textwrap.wrap(foot, width=54)
-    for idx, line in enumerate(footer_lines[:2]):
-        draw.text((margin, height - 56 + idx * 22), line, fill=TEXT_MUTED, font=foot_font)
-
-    right_x = left_w + 58
-    right_y = 46
+    left_x = 54
+    left_w = 500
+    text_w = 455
+    right_x = 590
+    right_y = 40
     right_w = width - right_x - 42
-    right_h = height - 92
+    right_h = height - 80
+
+    gt_text = ", ".join(package.get("gt_answer", []))
+    pred_text = package.get("model_prediction", "")
+    sections = [
+        ("Instruction", package.get("input_text", ""), "#2f5f87"),
+        ("GT", gt_text, GT_COLOR),
+        ("PREDICTION", pred_text, PRED_COLOR),
+    ]
+    total_text_h = sum(measure_section_height(draw, text_w, body) for _label, body, _accent in sections)
+    y = right_y + max((right_h - total_text_h) // 2, 0)
+    for label, body, accent in sections:
+        y = draw_section(draw, left_x, y, text_w, label, body, accent)
+
     scene = trim_scene_whitespace(scene_image).resize((right_w, right_h), Image.Resampling.LANCZOS)
     canvas.paste(scene, (right_x, right_y))
-    draw.rounded_rectangle((right_x, right_y, right_x + right_w, right_y + right_h), radius=8, outline="#c9c6bd", width=2)
 
     output_png.parent.mkdir(parents=True, exist_ok=True)
     canvas.save(output_png)
@@ -451,14 +474,14 @@ def main() -> int:
         else package_json.with_name("sample_report.png")
     )
 
-    points, colors, scene_kind, scene_path = load_scene(package, args.scene_mode)
+    points, colors, faces, scene_kind, scene_path = load_scene(package, args.scene_mode)
     boxes = collect_boxes(package)
     camera = choose_camera(points, colors, boxes)
-    scene_size = (args.width - 660, args.height - 120)
+    scene_size = (args.width - 620, args.height - 80)
     renderer_name = "matplotlib"
     scene_image = None
     if args.renderer in ("auto", "open3d"):
-        scene_image = try_render_open3d(points, colors, boxes, scene_size, camera)
+        scene_image = try_render_open3d(points, colors, faces, boxes, scene_size, camera)
         if scene_image is not None:
             renderer_name = "open3d"
     if scene_image is None:
@@ -472,6 +495,7 @@ def main() -> int:
             elev=camera["elev"],
             azim=camera["azim"],
             max_points=args.max_points,
+            faces=faces,
         )
 
     render_report(

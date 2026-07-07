@@ -32,8 +32,8 @@ To build a complete sample package with GT and model prediction metadata:
 bash run/render_package.sh --annotation-root /path/to/annotations --scene-root /path/to/scannet --predictions-json /path/to/preds.json --sample-index 0
 ```
 
-To render a static left-text/right-scene report:
+To render a paper-style static report with text on the left and mesh visualization on the right:
 
 ```bash
-bash run/render_report.sh outputs/sample_packages/scene0011_00_sample00000/sample_package.json
+bash run/render_report.sh outputs/sample_packages/scene0011_00_sample00000/sample_package.json --scene-mode mesh
 ```
