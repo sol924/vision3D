@@ -25,3 +25,9 @@ For mesh-token visualization:
 bash run/render_tokens_mesh.sh --annotation-root /path/to/annotations --scene-root /path/to/scannet --sample-index 0
 bash run/open_mesh.sh outputs/visualizations_mesh/example.ply --no-open
 ```
+
+To build a complete sample package with GT and model prediction metadata:
+
+```bash
+bash run/render_package.sh --annotation-root /path/to/annotations --scene-root /path/to/scannet --predictions-json /path/to/preds.json --sample-index 0
+```

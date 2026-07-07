@@ -14,6 +14,9 @@ visualization-ready artifacts.
 - `visualize_input_tokens_mesh.py`: builds a colored ScanNet mesh showing the object
   slots that become visual tokens. It writes mesh PLY, PNG preview, vertex labels, and
   JSON metadata.
+- `render_sample_package.py`: validates one annotation sample against model predictions
+  and writes a complete point/mesh package with input text, GT answer, model prediction,
+  bbox metadata, previews, and optional HTML viewers.
 
 ## Inputs
 
@@ -24,6 +27,8 @@ visualization-ready artifacts.
 - `--pred-attr-file`: predicted object attributes, default
   `scannet_mask3d_val_attributes.pt`.
 - `--gt-attr-file`: GT object attributes, default `scannet_val_attributes.pt`.
+- `--predictions-json`: model predictions. For ScanRefer-style outputs, each item should
+  contain `scene_id`, `prompt`, `gt_id`, `pred`, and optionally `qid`/`pred_id`.
 
 ## Outputs
 

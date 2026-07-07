@@ -13,6 +13,8 @@ matching Python module.
   single point-cloud sample with token/GT highlighting.
 - `bash run/render_tokens_mesh.sh ...`: calls `point/visualize_input_tokens_mesh.py` to
   render the input-token object mesh.
+- `bash run/render_package.sh ...`: validates a sample against prediction JSON and
+  writes a complete point/mesh visualization package plus unified metadata.
 - `bash run/open_point.sh <ply> ...`: calls `layout/open_local_pointcloud.py` to create
   or open an interactive point-cloud HTML file.
 - `bash run/open_mesh.sh <ply> ...`: calls `layout/open_local_mesh.py` to create or open
