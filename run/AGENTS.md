@@ -21,6 +21,8 @@ matching Python module.
   an interactive mesh HTML file, with bbox overlays when metadata is available.
 - `bash run/render_candidates.sh ...`: calls `layout/render_candidate_bbox_samples.py`
   to batch-render selected dataset indices.
+- `bash run/render_report.sh <sample_package.json> ...`: renders a static PNG report
+  with text on the left and the scene visualization on the right.
 
 ## Typical Usage
 
@@ -28,6 +30,7 @@ matching Python module.
 bash run/render_sample.sh --annotation-root /path/to/annotations --scene-root /path/to/scannet --sample-index 0
 bash run/render_tokens_mesh.sh --annotation-root /path/to/annotations --scene-root /path/to/scannet --sample-index 0
 bash run/open_mesh.sh outputs/visualizations_mesh/example.ply --annotation-root /path/to/annotations --no-open
+bash run/render_report.sh outputs/sample_packages/scene0011_00_sample00000/sample_package.json
 ```
 
 Set `PYTHON=/path/to/python` to use a specific interpreter.
