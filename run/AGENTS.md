@@ -25,6 +25,11 @@ matching Python module.
   with text on the left and the scene visualization on the right.
 - `bash run/render_batch_gallery.sh ...`: renders multiple sample packages/reports and
   writes an `index.html` gallery for browsing them.
+- `bash run/render_ours_dataset_grids.sh ...`: renders 21 samples for each dataset in
+  `/Volumes/T7 Shield/point_reduction_data/ours/<prediction-run>`, creates per-sample
+  paper tiles, and stitches one 3x7 PNG grid per dataset. Use `--datasets scanqa` to
+  run one dataset, `--limit 1 --cols 1 --rows 1` for a smoke test, and `--no-download`
+  when missing ScanNet scenes should fail instead of being downloaded.
 
 ## Typical Usage
 
@@ -34,6 +39,7 @@ bash run/render_tokens_mesh.sh --annotation-root /path/to/annotations --scene-ro
 bash run/open_mesh.sh outputs/visualizations_mesh/example.ply --annotation-root /path/to/annotations --no-open
 bash run/render_report.sh outputs/sample_packages/scene0011_00_sample00000/sample_package.json
 bash run/render_batch_gallery.sh --annotation-root /path/to/annotations --scene-root /path/to/scannet --predictions-json /path/to/preds.json --sample-indices 0 6002 6816
+PYTHON=/Users/sol/Research/Training_Free_Token_Redcution/.venv/bin/python bash run/render_ours_dataset_grids.sh
 ```
 
 Set `PYTHON=/path/to/python` to use a specific interpreter.

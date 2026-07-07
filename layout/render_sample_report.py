@@ -35,7 +35,6 @@ LEFT_LINE_STEP = 36
 SECTION_LABEL_GAP = 38
 SECTION_BOTTOM_GAP = 34
 LEGEND_ROW_GAP = 36
-LEGEND_HEIGHT = 78
 
 
 def parse_args() -> argparse.Namespace:
@@ -119,8 +118,21 @@ def bbox_edges() -> list[tuple[int, int]]:
 
 def collect_boxes(package: dict) -> list[dict[str, Any]]:
     boxes: list[dict[str, Any]] = []
-    if package.get("gt_bbox_loc"):
-        boxes.append({"label": "GT", "loc": package["gt_bbox_loc"], "color": GT_COLOR, "width": 2.8})
+    gt_items = [item for item in package.get("gt_bbox_locs", []) if item.get("loc")]
+    if gt_items:
+        for item in gt_items:
+            object_id = item.get("object_id")
+            label = "GT" if object_id is None else f"GT OBJ{int(object_id):03d}"
+            boxes.append({"label": label, "loc": item["loc"], "color": GT_COLOR, "width": 2.8})
+    elif package.get("gt_bbox_loc"):
+        boxes.append(
+            {
+                "label": f"GT OBJ{int(package.get('gt_object_id', 0)):03d}",
+                "loc": package["gt_bbox_loc"],
+                "color": GT_COLOR,
+                "width": 2.8,
+            }
+        )
     for item in package.get("model_pred_bbox_locs", []):
         if item.get("loc"):
             boxes.append(
@@ -132,6 +144,19 @@ def collect_boxes(package: dict) -> list[dict[str, Any]]:
                 }
             )
     return boxes
+
+
+def collect_legend_items(package: dict) -> list[tuple[str, str]]:
+    has_gt = bool(package.get("gt_bbox_loc")) or any(
+        item.get("loc") for item in package.get("gt_bbox_locs", [])
+    )
+    has_pred = any(item.get("loc") for item in package.get("model_pred_bbox_locs", []))
+    items: list[tuple[str, str]] = []
+    if has_gt:
+        items.append((GT_COLOR, "GT bbox"))
+    if has_pred:
+        items.append((PRED_COLOR, "Prediction bbox"))
+    return items
 
 
 def target_limits(points: np.ndarray, boxes: list[dict[str, Any]]) -> tuple[np.ndarray, np.ndarray]:
@@ -595,19 +620,26 @@ def measure_section_height(
     return SECTION_LABEL_GAP + (line_count + ellipsis) * LEFT_LINE_STEP + SECTION_BOTTOM_GAP
 
 
-def measure_legend_height() -> int:
-    return LEGEND_HEIGHT
+def measure_legend_height(item_count: int = 2) -> int:
+    if item_count <= 0:
+        return 0
+    return (item_count - 1) * LEGEND_ROW_GAP + 42
 
 
-def draw_bbox_legend(draw: ImageDraw.ImageDraw, x: int, y: int) -> int:
+def draw_bbox_legend(
+    draw: ImageDraw.ImageDraw,
+    x: int,
+    y: int,
+    items: list[tuple[str, str]],
+) -> int:
     legend_font = font(LEFT_TEXT_SIZE)
     line_w = 44
     text_gap = 14
-    for idx, (color, label) in enumerate(((GT_COLOR, "GT bbox"), (PRED_COLOR, "Prediction bbox"))):
+    for idx, (color, label) in enumerate(items):
         row_y = y + idx * LEGEND_ROW_GAP
         draw.line((x, row_y + 14, x + line_w, row_y + 14), fill=color, width=6)
         draw.text((x + line_w + text_gap, row_y), label, fill=TEXT_DARK, font=legend_font)
-    return y + measure_legend_height()
+    return y + measure_legend_height(len(items))
 
 
 def render_report(
@@ -638,14 +670,15 @@ def render_report(
         ("GT", gt_text, GT_COLOR),
         ("PREDICTION", pred_text, PRED_COLOR),
     ]
+    legend_items = collect_legend_items(package)
     total_text_h = (
         sum(measure_section_height(draw, text_w, body) for _label, body, _accent in sections)
-        + measure_legend_height()
+        + measure_legend_height(len(legend_items))
     )
     y = right_y + max((right_h - total_text_h) // 2, 0)
     for label, body, accent in sections:
         y = draw_section(draw, left_x, y, text_w, label, body, accent)
-    draw_bbox_legend(draw, left_x, y - 4)
+    draw_bbox_legend(draw, left_x, y - 4, legend_items)
 
     scene = trim_scene_whitespace(scene_image).resize((right_w, right_h), Image.Resampling.LANCZOS)
     canvas.paste(scene, (right_x, right_y))

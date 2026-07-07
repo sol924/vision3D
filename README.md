@@ -44,3 +44,13 @@ To batch-render multiple samples and open a browsable gallery:
 bash run/render_batch_gallery.sh --annotation-root /path/to/annotations --scene-root /path/to/scannet --predictions-json /path/to/preds.json --sample-indices 0 6002 6816 --output-dir outputs/batch_gallery
 open outputs/batch_gallery/index.html
 ```
+
+To render the five `ours/0625_best_02` datasets into paper-style 3x7 grids:
+
+```bash
+PYTHON=/Users/sol/Research/Training_Free_Token_Redcution/.venv/bin/python \
+  bash run/render_ours_dataset_grids.sh
+```
+
+The default output directory is
+`/Volumes/T7 Shield/point_reduction_data/ours/visualization_0625_best_02`.
