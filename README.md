@@ -45,7 +45,8 @@ bash run/render_batch_gallery.sh --annotation-root /path/to/annotations --scene-
 open outputs/batch_gallery/index.html
 ```
 
-To render the five `ours/0625_best_02` datasets into paper-style 3x7 grids:
+To render the five `ours/0625_best_02` datasets into paper-style 2x6 grids using
+correctly predicted samples:
 
 ```bash
 PYTHON=/Users/sol/Research/Training_Free_Token_Redcution/.venv/bin/python \
@@ -54,5 +55,5 @@ PYTHON=/Users/sol/Research/Training_Free_Token_Redcution/.venv/bin/python \
 
 The default output directory is
 `/Volumes/T7 Shield/point_reduction_data/ours/visualization_0625_best_02`.
-This command uses the `a4-grid` text preset and Times-style font by default so each
+This command uses the `a4-2x6` text preset and Times-style font by default so each
 dataset grid can be placed on an A4 paper page more clearly.

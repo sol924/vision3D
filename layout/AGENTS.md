@@ -16,15 +16,15 @@ bounding boxes when metadata and annotation files are available.
 - `render_sample_report.py`: renders a static left-text/right-scene PNG report from a
   `sample_package.json` file. The left side shows only Instruction, GT, and
   PREDICTION; the right side shows mesh visualization with GT and prediction bboxes.
-  Use `--text-preset a4-grid --font-family times` when the final 3x7 grid will be
+  Use `--text-preset a4-2x6 --font-family times` when the final 2x6 grid will be
   placed on an A4 paper page.
 - `render_batch_gallery.py`: batch-renders sample packages and paper-style PNG reports,
   then writes an `index.html` gallery for browsing multiple samples.
 - `render_ours_dataset_grids.py`: renders the five `ours/<prediction-run>` datasets
-  (`scanrefer`, `multi3dref`, `scan2cap`, `scanqa`, `sqa3d`) into 21-sample 3x7 PNG
-  grids. It copies local ScanNet scenes when available, downloads missing ScanNet files
-  into the requested output directory, renders per-sample tiles, and stitches one large
-  figure per dataset.
+  (`scanrefer`, `multi3dref`, `scan2cap`, `scanqa`, `sqa3d`) into 12-sample 2x6 PNG
+  grids using correctly predicted samples by default. It copies local ScanNet scenes
+  when available, downloads missing ScanNet files into the requested output directory,
+  renders per-sample tiles, and stitches one large figure per dataset.
 
 ## Static Report Style
 
@@ -36,8 +36,8 @@ relative to the mesh panel. The scene mesh should keep original ScanNet colors; 
 recolor objects for paper reports. Use green GT bboxes, orange prediction bboxes, and a
 camera angle that keeps the target object visible with surrounding context. Prefer
 Open3D offscreen rendering when available; otherwise use the Matplotlib mesh fallback.
-For A4 dataset grids, use Times-style text with the `a4-grid` preset so text remains
-legible after the 3x7 image is scaled to the page.
+For A4 dataset grids, use Times-style text with the `a4-2x6` preset so text remains
+legible after the 2x6 image is scaled to the page.
 
 ## Metadata Contract
 

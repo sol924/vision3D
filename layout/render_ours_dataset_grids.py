@@ -4,6 +4,7 @@ import argparse
 import json
 import re
 import shutil
+import string
 import subprocess
 import sys
 from pathlib import Path
@@ -50,7 +51,7 @@ OBJ_PATTERN = re.compile(r"<OBJ(\d{3})>")
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Render 21-sample, 3x7 paper grids for each ours dataset prediction file."
+        description="Render correct-sample paper grids for each ours dataset prediction file."
     )
     parser.add_argument("--ours-root", default=str(DEFAULT_OURS_ROOT))
     parser.add_argument("--prediction-run", default="0625_best_02")
@@ -63,14 +64,26 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--output-dir", default=None)
     parser.add_argument("--datasets", nargs="+", default=list(DEFAULT_DATASETS), choices=DEFAULT_DATASETS)
-    parser.add_argument("--limit", type=int, default=21)
-    parser.add_argument("--cols", type=int, default=3)
-    parser.add_argument("--rows", type=int, default=7)
-    parser.add_argument("--width", type=int, default=1800)
+    parser.add_argument("--limit", type=int, default=12)
+    parser.add_argument("--cols", type=int, default=2)
+    parser.add_argument("--rows", type=int, default=6)
+    parser.add_argument("--width", type=int, default=2400)
     parser.add_argument("--height", type=int, default=1100)
     parser.add_argument("--renderer", choices=("auto", "open3d", "matplotlib"), default="matplotlib")
-    parser.add_argument("--text-preset", choices=("compact", "a4-grid"), default="a4-grid")
+    parser.add_argument("--text-preset", choices=("compact", "a4-grid", "a4-2x6"), default="a4-2x6")
     parser.add_argument("--font-family", choices=("times", "arial"), default="times")
+    parser.add_argument(
+        "--correct-only",
+        action="store_true",
+        default=True,
+        help="Select only samples that pass the dataset-specific correctness rule. Enabled by default.",
+    )
+    parser.add_argument(
+        "--allow-incorrect",
+        action="store_false",
+        dest="correct_only",
+        help="Disable correctness filtering and select the first available samples.",
+    )
     parser.add_argument("--gt-attr-file", default="scannet_val_attributes.pt")
     parser.add_argument("--pred-attr-file", default="scannet_mask3d_val_attributes.pt")
     parser.add_argument("--no-download", action="store_true", help="Fail instead of downloading missing scenes.")
@@ -108,6 +121,41 @@ def build_scan2cap_lookup(dataset: list[dict]) -> dict[tuple[str, int, int], lis
         key = (str(item.get("scene_id")), int(item.get("obj_id", -1)), int(item.get("pred_id", -1)))
         lookup.setdefault(key, []).append(index)
     return lookup
+
+
+def normalize_answer_text(text: Any) -> str:
+    normalized = str(text).lower().strip()
+    normalized = normalized.translate(str.maketrans("", "", string.punctuation))
+    return " ".join(normalized.split())
+
+
+def object_id_set_from_text(text: Any) -> set[int]:
+    return {int(match.group(1)) for match in OBJ_PATTERN.finditer(str(text or ""))}
+
+
+def is_prediction_correct(dataset_name: str, prediction: dict) -> bool:
+    pred = str(prediction.get("pred", ""))
+    refs = prediction.get("ref_captions", []) or []
+    if dataset_name == "scanrefer":
+        gt_ids: set[int] = set()
+        for ref in refs:
+            gt_ids.update(object_id_set_from_text(ref))
+        return object_id_set_from_text(pred) == gt_ids
+    if dataset_name == "multi3dref":
+        gt_ids = {int(item) for item in refs if int(item) >= 0}
+        pred_ids = object_id_set_from_text(pred)
+        if not gt_ids:
+            return normalize_answer_text(pred).startswith("no") and not pred_ids
+        return pred_ids == gt_ids
+    if dataset_name in ("scanqa", "sqa3d"):
+        pred_norm = normalize_answer_text(pred)
+        return any(
+            ref_norm and (pred_norm == ref_norm or ref_norm in pred_norm)
+            for ref_norm in (normalize_answer_text(ref) for ref in refs)
+        )
+    if dataset_name == "scan2cap":
+        return int(prediction.get("pred_id", -1)) == int(prediction.get("gt_id", -2))
+    return False
 
 
 def resolve_annotation_index(
@@ -221,12 +269,16 @@ def select_records(
     scene_root: Path,
     scene_sources: list[Path],
     limit: int,
+    correct_only: bool,
 ) -> list[dict]:
     scan2cap_lookup = build_scan2cap_lookup(annotations) if dataset_name == "scan2cap" else {}
     local_records: list[dict] = []
     remote_records: list[dict] = []
     seen_scenes: set[str] = set()
     for prediction_order, prediction in enumerate(predictions):
+        is_correct = is_prediction_correct(dataset_name, prediction)
+        if correct_only and not is_correct:
+            continue
         scene_id = str(prediction.get("scene_id", ""))
         if not scene_id or scene_id in seen_scenes:
             continue
@@ -240,6 +292,7 @@ def select_records(
             "scene_id": scene_id,
             "eval_name_index": prediction.get("eval_name_index"),
             "prediction": prediction,
+            "is_correct": is_correct,
         }
         if scene_available_locally(scene_id, scene_root, scene_sources):
             local_records.append(record)
@@ -252,7 +305,8 @@ def select_records(
     if len(selected) < limit:
         selected.extend(remote_records[: limit - len(selected)])
     if len(selected) < limit:
-        raise RuntimeError(f"{dataset_name}: only selected {len(selected)} distinct-scene samples.")
+        label = "correct distinct-scene" if correct_only else "distinct-scene"
+        raise RuntimeError(f"{dataset_name}: only selected {len(selected)} {label} samples.")
     return selected
 
 
@@ -438,6 +492,17 @@ def clear_previous_tiles(tile_dir: Path) -> int:
     return removed
 
 
+def clear_previous_grids(grid_dir: Path, dataset_name: str) -> int:
+    if not grid_dir.exists():
+        return 0
+    removed = 0
+    for path in grid_dir.glob(f"{dataset_name}_*_grid.png"):
+        if path.is_file():
+            path.unlink()
+            removed += 1
+    return removed
+
+
 def main() -> int:
     args = parse_args()
     ours_root = Path(args.ours_root)
@@ -459,6 +524,13 @@ def main() -> int:
         "prediction_dir": str(prediction_dir),
         "annotation_root": str(annotation_root),
         "output_dir": str(output_dir),
+        "correct_only": args.correct_only,
+        "limit": args.limit,
+        "cols": args.cols,
+        "rows": args.rows,
+        "tile_size": [args.width, args.height],
+        "text_preset": args.text_preset,
+        "font_family": args.font_family,
         "datasets": {},
     }
 
@@ -474,10 +546,12 @@ def main() -> int:
             scene_root,
             scene_sources,
             args.limit,
+            args.correct_only,
         )
         dataset_manifest: dict[str, Any] = {
             "dataset_json": dataset_json,
             "predictions_json": str(pred_path),
+            "correct_only": args.correct_only,
             "records": [],
         }
         tile_paths: list[Path] = []
@@ -485,7 +559,11 @@ def main() -> int:
             removed = clear_previous_tiles(tile_root / dataset_name)
             if removed:
                 print(f"{dataset_name}: removed {removed} stale tile PNGs")
-        print(f"{dataset_name}: selected {len(records)} samples")
+            removed_grids = clear_previous_grids(grid_root, dataset_name)
+            if removed_grids:
+                print(f"{dataset_name}: removed {removed_grids} stale grid PNGs")
+        selection_label = "correct samples" if args.correct_only else "samples"
+        print(f"{dataset_name}: selected {len(records)} {selection_label}")
         for ordinal, record in enumerate(records):
             sample = annotations[record["annotation_index"]]
             prediction = record["prediction"]
@@ -542,6 +620,7 @@ def main() -> int:
                     "annotation_index": record["annotation_index"],
                     "prediction_order": record["prediction_order"],
                     "eval_name_index": record["eval_name_index"],
+                    "is_correct": record["is_correct"],
                     "scene_info": scene_info,
                     "tile_png": str(tile_path),
                     "report_info": report_info,

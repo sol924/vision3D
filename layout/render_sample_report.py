@@ -91,6 +91,24 @@ STYLE_PRESETS = {
         "legend_line_width": 10,
         "legend_line_y": 32,
     },
+    "a4-2x6": {
+        "text_size": 78,
+        "line_step": 84,
+        "section_label_gap": 70,
+        "section_bottom_gap": 18,
+        "legend_row_gap": 84,
+        "legend_base_height": 84,
+        "left_x": 70,
+        "text_w": 1040,
+        "right_x": 1180,
+        "right_y": 40,
+        "right_margin": 40,
+        "bottom_margin": 40,
+        "legend_line_w": 112,
+        "legend_text_gap": 28,
+        "legend_line_width": 12,
+        "legend_line_y": 42,
+    },
 }
 
 FONT_CANDIDATES = {
@@ -150,9 +168,9 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--text-preset",
-        choices=("compact", "a4-grid"),
+        choices=("compact", "a4-grid", "a4-2x6"),
         default="compact",
-        help="Left-text layout preset. Use a4-grid when a 3x7 grid will be placed on A4 paper.",
+        help="Left-text layout preset. Use a4-2x6 when a 2x6 grid will be placed on A4 paper.",
     )
     parser.add_argument(
         "--font-family",
@@ -781,10 +799,12 @@ def render_report(
 
     gt_text = ", ".join(package.get("gt_answer", []))
     pred_text = package.get("model_prediction", "")
+    instruction_max_lines = 3 if style.text_size >= 75 else 4 if style.text_size >= 60 else 8
+    answer_max_lines = 1 if style.text_size >= 75 else 2 if style.text_size >= 60 else 8
     sections = [
-        ("Instruction", package.get("input_text", ""), "#2f5f87", 4 if style.text_size >= 60 else 8),
-        ("GT", gt_text, GT_COLOR, 2 if style.text_size >= 60 else 8),
-        ("PREDICTION", pred_text, PRED_COLOR, 2 if style.text_size >= 60 else 8),
+        ("Instruction", package.get("input_text", ""), "#2f5f87", instruction_max_lines),
+        ("GT", gt_text, GT_COLOR, answer_max_lines),
+        ("PREDICTION", pred_text, PRED_COLOR, answer_max_lines),
     ]
     legend_items = collect_legend_items(package)
     total_text_h = (
