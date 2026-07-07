@@ -69,6 +69,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--width", type=int, default=1800)
     parser.add_argument("--height", type=int, default=1100)
     parser.add_argument("--renderer", choices=("auto", "open3d", "matplotlib"), default="matplotlib")
+    parser.add_argument("--text-preset", choices=("compact", "a4-grid"), default="a4-grid")
+    parser.add_argument("--font-family", choices=("times", "arial"), default="times")
     parser.add_argument("--gt-attr-file", default="scannet_val_attributes.pt")
     parser.add_argument("--pred-attr-file", default="scannet_mask3d_val_attributes.pt")
     parser.add_argument("--no-download", action="store_true", help="Fail instead of downloading missing scenes.")
@@ -369,7 +371,15 @@ def build_package(
     return package
 
 
-def render_report(package_path: Path, output_png: Path, width: int, height: int, renderer: str) -> dict:
+def render_report(
+    package_path: Path,
+    output_png: Path,
+    width: int,
+    height: int,
+    renderer: str,
+    text_preset: str,
+    font_family: str,
+) -> dict:
     result = subprocess.run(
         [
             sys.executable,
@@ -385,6 +395,10 @@ def render_report(package_path: Path, output_png: Path, width: int, height: int,
             str(width),
             "--height",
             str(height),
+            "--text-preset",
+            text_preset,
+            "--font-family",
+            font_family,
         ],
         cwd=REPO_ROOT,
         check=True,
@@ -510,7 +524,15 @@ def main() -> int:
                     pred_attrs,
                 )
                 tile_path = tile_root / dataset_name / f"{ordinal:02d}_{record['eval_name_index']}__{record['scene_id']}.png"
-                report_info = render_report(package_path, tile_path, args.width, args.height, args.renderer)
+                report_info = render_report(
+                    package_path,
+                    tile_path,
+                    args.width,
+                    args.height,
+                    args.renderer,
+                    args.text_preset,
+                    args.font_family,
+                )
             tile_paths.append(tile_path)
             dataset_manifest["records"].append(
                 {

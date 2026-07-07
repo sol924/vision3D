@@ -5,6 +5,7 @@ import io
 import json
 import math
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -30,11 +31,96 @@ PRED_COLOR = "#e2552f"
 TEXT_DARK = "#000000"
 WHITE = "#ffffff"
 SCENE_BG = np.array([255, 255, 255], dtype=np.int16)
-LEFT_TEXT_SIZE = 25
-LEFT_LINE_STEP = 36
-SECTION_LABEL_GAP = 38
-SECTION_BOTTOM_GAP = 34
-LEGEND_ROW_GAP = 36
+
+
+@dataclass(frozen=True)
+class ReportStyle:
+    text_size: int
+    line_step: int
+    section_label_gap: int
+    section_bottom_gap: int
+    legend_row_gap: int
+    legend_base_height: int
+    left_x: int
+    text_w: int
+    right_x: int
+    right_y: int
+    right_margin: int
+    bottom_margin: int
+    legend_line_w: int
+    legend_text_gap: int
+    legend_line_width: int
+    legend_line_y: int
+    font_family: str
+
+
+STYLE_PRESETS = {
+    "compact": {
+        "text_size": 25,
+        "line_step": 36,
+        "section_label_gap": 38,
+        "section_bottom_gap": 34,
+        "legend_row_gap": 36,
+        "legend_base_height": 42,
+        "left_x": 54,
+        "text_w": 455,
+        "right_x": 590,
+        "right_y": 40,
+        "right_margin": 42,
+        "bottom_margin": 40,
+        "legend_line_w": 44,
+        "legend_text_gap": 14,
+        "legend_line_width": 6,
+        "legend_line_y": 14,
+    },
+    "a4-grid": {
+        "text_size": 62,
+        "line_step": 70,
+        "section_label_gap": 68,
+        "section_bottom_gap": 34,
+        "legend_row_gap": 70,
+        "legend_base_height": 78,
+        "left_x": 60,
+        "text_w": 780,
+        "right_x": 880,
+        "right_y": 40,
+        "right_margin": 36,
+        "bottom_margin": 40,
+        "legend_line_w": 90,
+        "legend_text_gap": 22,
+        "legend_line_width": 10,
+        "legend_line_y": 32,
+    },
+}
+
+FONT_CANDIDATES = {
+    "times": {
+        False: [
+            "/System/Library/Fonts/Supplemental/Times New Roman.ttf",
+            "/System/Library/Fonts/Times.ttc",
+            "/usr/share/fonts/truetype/liberation/LiberationSerif-Regular.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSerif.ttf",
+        ],
+        True: [
+            "/System/Library/Fonts/Supplemental/Times New Roman Bold.ttf",
+            "/System/Library/Fonts/Times.ttc",
+            "/usr/share/fonts/truetype/liberation/LiberationSerif-Bold.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSerif-Bold.ttf",
+        ],
+    },
+    "arial": {
+        False: [
+            "/System/Library/Fonts/Supplemental/Arial.ttf",
+            "/Library/Fonts/Arial.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        ],
+        True: [
+            "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
+            "/Library/Fonts/Arial Bold.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        ],
+    },
+}
 
 
 def parse_args() -> argparse.Namespace:
@@ -61,6 +147,18 @@ def parse_args() -> argparse.Namespace:
         choices=("auto", "open3d", "matplotlib"),
         default="auto",
         help="Static scene renderer. Auto tries Open3D, then Matplotlib.",
+    )
+    parser.add_argument(
+        "--text-preset",
+        choices=("compact", "a4-grid"),
+        default="compact",
+        help="Left-text layout preset. Use a4-grid when a 3x7 grid will be placed on A4 paper.",
+    )
+    parser.add_argument(
+        "--font-family",
+        choices=("times", "arial"),
+        default="times",
+        help="Font family for the left text block and bbox legend.",
     )
     return parser.parse_args()
 
@@ -554,12 +652,17 @@ def try_render_open3d(
         return None
 
 
-def font(size: int, bold: bool = False) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
-    candidates = [
-        "/System/Library/Fonts/Supplemental/Arial Bold.ttf" if bold else "/System/Library/Fonts/Supplemental/Arial.ttf",
-        "/Library/Fonts/Arial Bold.ttf" if bold else "/Library/Fonts/Arial.ttf",
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf" if bold else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-    ]
+def build_style(text_preset: str, font_family: str) -> ReportStyle:
+    spec = STYLE_PRESETS[text_preset].copy()
+    spec["font_family"] = font_family
+    return ReportStyle(**spec)
+
+
+def font(size: int, bold: bool = False, family: str = "times") -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
+    candidates = FONT_CANDIDATES[family][bold]
+    if family != "times":
+        candidates = candidates + FONT_CANDIDATES["times"][bold]
+    candidates = candidates + FONT_CANDIDATES["arial"][bold]
     for candidate in candidates:
         try:
             return ImageFont.truetype(candidate, size=size)
@@ -593,37 +696,41 @@ def draw_section(
     label: str,
     body: str,
     accent: str,
+    style: ReportStyle,
+    max_lines: int,
 ) -> int:
-    label_font = font(LEFT_TEXT_SIZE, bold=True)
-    body_font = font(LEFT_TEXT_SIZE)
+    label_font = font(style.text_size, bold=True, family=style.font_family)
+    body_font = font(style.text_size, family=style.font_family)
     draw.text((x, y), label, fill=TEXT_DARK, font=label_font)
-    y += SECTION_LABEL_GAP
+    y += style.section_label_gap
     lines = wrap_text(draw, body, body_font, width)
-    for line in lines[:8]:
+    for line in lines[:max_lines]:
         draw.text((x, y), line, fill=TEXT_DARK, font=body_font)
-        y += LEFT_LINE_STEP
-    if len(lines) > 8:
+        y += style.line_step
+    if len(lines) > max_lines:
         draw.text((x, y), "...", fill=TEXT_DARK, font=body_font)
-        y += LEFT_LINE_STEP
-    return y + SECTION_BOTTOM_GAP
+        y += style.line_step
+    return y + style.section_bottom_gap
 
 
 def measure_section_height(
     draw: ImageDraw.ImageDraw,
     width: int,
     body: str,
+    style: ReportStyle,
     max_lines: int = 8,
 ) -> int:
-    body_font = font(LEFT_TEXT_SIZE)
-    line_count = min(len(wrap_text(draw, body, body_font, width)), max_lines)
-    ellipsis = 1 if len(wrap_text(draw, body, body_font, width)) > max_lines else 0
-    return SECTION_LABEL_GAP + (line_count + ellipsis) * LEFT_LINE_STEP + SECTION_BOTTOM_GAP
+    body_font = font(style.text_size, family=style.font_family)
+    lines = wrap_text(draw, body, body_font, width)
+    line_count = min(len(lines), max_lines)
+    ellipsis = 1 if len(lines) > max_lines else 0
+    return style.section_label_gap + (line_count + ellipsis) * style.line_step + style.section_bottom_gap
 
 
-def measure_legend_height(item_count: int = 2) -> int:
+def measure_legend_height(style: ReportStyle, item_count: int = 2) -> int:
     if item_count <= 0:
         return 0
-    return (item_count - 1) * LEGEND_ROW_GAP + 42
+    return (item_count - 1) * style.legend_row_gap + style.legend_base_height
 
 
 def draw_bbox_legend(
@@ -631,15 +738,24 @@ def draw_bbox_legend(
     x: int,
     y: int,
     items: list[tuple[str, str]],
+    style: ReportStyle,
 ) -> int:
-    legend_font = font(LEFT_TEXT_SIZE)
-    line_w = 44
-    text_gap = 14
+    legend_font = font(style.text_size, family=style.font_family)
     for idx, (color, label) in enumerate(items):
-        row_y = y + idx * LEGEND_ROW_GAP
-        draw.line((x, row_y + 14, x + line_w, row_y + 14), fill=color, width=6)
-        draw.text((x + line_w + text_gap, row_y), label, fill=TEXT_DARK, font=legend_font)
-    return y + measure_legend_height(len(items))
+        row_y = y + idx * style.legend_row_gap
+        line_y = row_y + style.legend_line_y
+        draw.line(
+            (x, line_y, x + style.legend_line_w, line_y),
+            fill=color,
+            width=style.legend_line_width,
+        )
+        draw.text(
+            (x + style.legend_line_w + style.legend_text_gap, row_y),
+            label,
+            fill=TEXT_DARK,
+            font=legend_font,
+        )
+    return y + measure_legend_height(style, len(items))
 
 
 def render_report(
@@ -650,35 +766,35 @@ def render_report(
     camera: dict[str, float],
     renderer_name: str,
     scene_kind: str,
+    style: ReportStyle,
 ) -> None:
     width, height = size
     canvas = Image.new("RGB", size, WHITE)
     draw = ImageDraw.Draw(canvas)
 
-    left_x = 54
-    left_w = 500
-    text_w = 455
-    right_x = 590
-    right_y = 40
-    right_w = width - right_x - 42
-    right_h = height - 80
+    left_x = style.left_x
+    text_w = style.text_w
+    right_x = style.right_x
+    right_y = style.right_y
+    right_w = width - right_x - style.right_margin
+    right_h = height - right_y - style.bottom_margin
 
     gt_text = ", ".join(package.get("gt_answer", []))
     pred_text = package.get("model_prediction", "")
     sections = [
-        ("Instruction", package.get("input_text", ""), "#2f5f87"),
-        ("GT", gt_text, GT_COLOR),
-        ("PREDICTION", pred_text, PRED_COLOR),
+        ("Instruction", package.get("input_text", ""), "#2f5f87", 4 if style.text_size >= 60 else 8),
+        ("GT", gt_text, GT_COLOR, 2 if style.text_size >= 60 else 8),
+        ("PREDICTION", pred_text, PRED_COLOR, 2 if style.text_size >= 60 else 8),
     ]
     legend_items = collect_legend_items(package)
     total_text_h = (
-        sum(measure_section_height(draw, text_w, body) for _label, body, _accent in sections)
-        + measure_legend_height(len(legend_items))
+        sum(measure_section_height(draw, text_w, body, style, max_lines) for _label, body, _accent, max_lines in sections)
+        + measure_legend_height(style, len(legend_items))
     )
     y = right_y + max((right_h - total_text_h) // 2, 0)
-    for label, body, accent in sections:
-        y = draw_section(draw, left_x, y, text_w, label, body, accent)
-    draw_bbox_legend(draw, left_x, y - 4, legend_items)
+    for label, body, accent, max_lines in sections:
+        y = draw_section(draw, left_x, y, text_w, label, body, accent, style, max_lines)
+    draw_bbox_legend(draw, left_x, y - 4, legend_items, style)
 
     scene = trim_scene_whitespace(scene_image).resize((right_w, right_h), Image.Resampling.LANCZOS)
     canvas.paste(scene, (right_x, right_y))
@@ -700,7 +816,11 @@ def main() -> int:
     points, colors, faces, scene_kind, scene_path = load_scene(package, args.scene_mode)
     boxes = collect_boxes(package)
     camera = choose_camera(points, colors, boxes, faces if scene_kind == "mesh" else None)
-    scene_size = (args.width - 620, args.height - 80)
+    style = build_style(args.text_preset, args.font_family)
+    scene_size = (
+        args.width - style.right_x - style.right_margin,
+        args.height - style.right_y - style.bottom_margin,
+    )
     renderer_name = "matplotlib"
     scene_image = None
     if args.renderer in ("auto", "open3d"):
@@ -729,12 +849,15 @@ def main() -> int:
         camera=camera,
         renderer_name=renderer_name,
         scene_kind=scene_kind,
+        style=style,
     )
     summary = {
         "report_png": str(output_png.relative_to(REPO_ROOT) if output_png.is_relative_to(REPO_ROOT) else output_png),
         "scene_source": str(scene_path.relative_to(REPO_ROOT) if scene_path.is_relative_to(REPO_ROOT) else scene_path),
         "scene_kind": scene_kind,
         "renderer": renderer_name,
+        "text_preset": args.text_preset,
+        "font_family": args.font_family,
         "camera": camera,
     }
     print(json.dumps(summary, indent=2, ensure_ascii=False))
