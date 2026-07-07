@@ -37,3 +37,10 @@ To render a paper-style static report with text on the left and mesh visualizati
 ```bash
 bash run/render_report.sh outputs/sample_packages/scene0011_00_sample00000/sample_package.json --scene-mode mesh
 ```
+
+To batch-render multiple samples and open a browsable gallery:
+
+```bash
+bash run/render_batch_gallery.sh --annotation-root /path/to/annotations --scene-root /path/to/scannet --predictions-json /path/to/preds.json --sample-indices 0 6002 6816 --output-dir outputs/batch_gallery
+open outputs/batch_gallery/index.html
+```

@@ -16,15 +16,17 @@ bounding boxes when metadata and annotation files are available.
 - `render_sample_report.py`: renders a static left-text/right-scene PNG report from a
   `sample_package.json` file. The left side shows only Instruction, GT, and
   PREDICTION; the right side shows mesh visualization with GT and prediction bboxes.
+- `render_batch_gallery.py`: batch-renders sample packages and paper-style PNG reports,
+  then writes an `index.html` gallery for browsing multiple samples.
 
 ## Static Report Style
 
 Reports should be paper-oriented: pure white background, no cards, no frames, no
-footer, and no extra metadata beyond Instruction, GT, and PREDICTION. The text block
-should be vertically centered relative to the mesh panel. Use green GT bboxes, orange
-prediction bboxes, and a camera angle that keeps the target object visible with
-surrounding context. Prefer Open3D offscreen rendering when available; otherwise use
-the Matplotlib fallback.
+footer, and no extra metadata beyond Instruction, GT, PREDICTION, and a small bbox
+legend. The text block should be vertically centered relative to the mesh panel. Use
+green GT bboxes, orange prediction bboxes, and a camera angle that keeps the target
+object visible with surrounding context. Prefer Open3D offscreen rendering when
+available; otherwise use the Matplotlib fallback.
 
 ## Metadata Contract
 

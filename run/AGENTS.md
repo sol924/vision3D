@@ -23,6 +23,8 @@ matching Python module.
   to batch-render selected dataset indices.
 - `bash run/render_report.sh <sample_package.json> ...`: renders a static PNG report
   with text on the left and the scene visualization on the right.
+- `bash run/render_batch_gallery.sh ...`: renders multiple sample packages/reports and
+  writes an `index.html` gallery for browsing them.
 
 ## Typical Usage
 
@@ -31,6 +33,7 @@ bash run/render_sample.sh --annotation-root /path/to/annotations --scene-root /p
 bash run/render_tokens_mesh.sh --annotation-root /path/to/annotations --scene-root /path/to/scannet --sample-index 0
 bash run/open_mesh.sh outputs/visualizations_mesh/example.ply --annotation-root /path/to/annotations --no-open
 bash run/render_report.sh outputs/sample_packages/scene0011_00_sample00000/sample_package.json
+bash run/render_batch_gallery.sh --annotation-root /path/to/annotations --scene-root /path/to/scannet --predictions-json /path/to/preds.json --sample-indices 0 6002 6816
 ```
 
 Set `PYTHON=/path/to/python` to use a specific interpreter.

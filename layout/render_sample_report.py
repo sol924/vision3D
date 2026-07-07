@@ -424,6 +424,22 @@ def measure_section_height(
     return 38 + (line_count + ellipsis) * 36 + 34
 
 
+def measure_legend_height() -> int:
+    return 62
+
+
+def draw_bbox_legend(draw: ImageDraw.ImageDraw, x: int, y: int) -> int:
+    legend_font = font(19)
+    line_w = 44
+    text_gap = 14
+    row_gap = 28
+    for idx, (color, label) in enumerate(((GT_COLOR, "GT bbox"), (PRED_COLOR, "Prediction bbox"))):
+        row_y = y + idx * row_gap
+        draw.line((x, row_y + 10, x + line_w, row_y + 10), fill=color, width=6)
+        draw.text((x + line_w + text_gap, row_y), label, fill=TEXT_MUTED, font=legend_font)
+    return y + measure_legend_height()
+
+
 def render_report(
     package: dict,
     scene_image: Image.Image,
@@ -452,10 +468,14 @@ def render_report(
         ("GT", gt_text, GT_COLOR),
         ("PREDICTION", pred_text, PRED_COLOR),
     ]
-    total_text_h = sum(measure_section_height(draw, text_w, body) for _label, body, _accent in sections)
+    total_text_h = (
+        sum(measure_section_height(draw, text_w, body) for _label, body, _accent in sections)
+        + measure_legend_height()
+    )
     y = right_y + max((right_h - total_text_h) // 2, 0)
     for label, body, accent in sections:
         y = draw_section(draw, left_x, y, text_w, label, body, accent)
+    draw_bbox_legend(draw, left_x, y - 4)
 
     scene = trim_scene_whitespace(scene_image).resize((right_w, right_h), Image.Resampling.LANCZOS)
     canvas.paste(scene, (right_x, right_y))
