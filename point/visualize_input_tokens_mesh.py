@@ -150,11 +150,17 @@ def load_scene_mesh(scene_dir: Path, scene_id: str) -> tuple[np.ndarray, np.ndar
         np.int32
     )
 
-    axis_align = read_axis_align_matrix(meta_path)
-    points_h = np.concatenate(
-        [points, np.ones((points.shape[0], 1), dtype=np.float32)], axis=1
-    )
-    points = (points_h @ axis_align.T)[:, :3]
+    axis_align = read_axis_align_matrix(meta_path).astype(np.float64)
+    x = points[:, 0].astype(np.float64)
+    y = points[:, 1].astype(np.float64)
+    z = points[:, 2].astype(np.float64)
+    points = np.column_stack(
+        [
+            x * axis_align[0, 0] + y * axis_align[0, 1] + z * axis_align[0, 2] + axis_align[0, 3],
+            x * axis_align[1, 0] + y * axis_align[1, 1] + z * axis_align[1, 2] + axis_align[1, 3],
+            x * axis_align[2, 0] + y * axis_align[2, 1] + z * axis_align[2, 2] + axis_align[2, 3],
+        ]
+    ).astype(np.float32)
     return points, colors, faces
 
 
