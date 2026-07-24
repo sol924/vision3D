@@ -58,3 +58,30 @@ The default output directory is
 This command uses the `a4-2x6` text preset and Times-style font by default so each
 dataset grid can be placed on an A4 paper page more clearly. The default tile size is
 `3200x1500`, producing `6400x9000` grids with complete text and one-line bbox legends.
+
+To render four MLLMs independently with ten strictly correct local samples per
+dataset, first create and complete the Scan2Cap semantic-review file:
+
+```bash
+PYTHON=/path/to/python bash run/render_4mllm_correct_samples.sh \
+  --prediction-root /path/to/90pct_4mllm_predictions \
+  --annotation-root /path/to/annotations \
+  --scene-source /path/to/scannet_samples \
+  --prepare-scan2cap-review
+```
+
+Mark ten semantically correct, distinct-scene Scan2Cap candidates per model as
+`approved` in `outputs/90pct_4mllm_correct_samples/scan2cap_review.json`, including
+the matching reference index and a short review reason. Then render:
+
+```bash
+PYTHON=/path/to/python bash run/render_4mllm_correct_samples.sh \
+  --prediction-root /path/to/90pct_4mllm_predictions \
+  --annotation-root /path/to/annotations \
+  --scene-source /path/to/scannet_samples
+```
+
+The command applies the strict Free3D correctness definitions: ScanRefer
+`Acc@0.50`, Multi3DRef `F1@0.50=1`, cleaned exact-match QA/SQA answers, and
+Scan2Cap bbox IoU at least 0.5 plus semantic review. It writes 200 individual
+reports, twenty 2x5 grids, a selection audit, and an HTML gallery.

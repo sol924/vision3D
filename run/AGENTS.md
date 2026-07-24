@@ -32,6 +32,9 @@ matching Python module.
   readability, complete text, and one-line bbox legends. Use `--datasets scanqa` to
   run one dataset, `--limit 1 --cols 1 --rows 1` for a smoke test, and `--no-download`
   when missing ScanNet scenes should fail instead of being downloaded.
+- `bash run/render_4mllm_correct_samples.sh ...`: selects and renders ten strictly
+  correct, distinct-scene samples for each of four MLLMs and five datasets, producing
+  individual PNG reports, 2x5 grids, a selection audit, and an HTML gallery.
 
 ## Typical Usage
 

@@ -25,6 +25,10 @@ bounding boxes when metadata and annotation files are available.
   grids using correctly predicted samples by default. It prioritizes cached scenes and
   shorter complete text among correct samples, renders per-sample tiles, and stitches
   one large figure per dataset.
+- `render_4mllm_correct_samples.py`: renders four-model prediction exports organized
+  as `<root>/<model>/<dataset>.json`. It selects ten distinct-scene samples per dataset
+  with strict Free3D correctness evidence, requires semantic approval for Scan2Cap,
+  and writes individual reports, 2x5 grids, manifests, and an HTML gallery.
 
 ## Static Report Style
 
