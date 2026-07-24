@@ -28,7 +28,8 @@ bounding boxes when metadata and annotation files are available.
 - `render_4mllm_correct_samples.py`: renders four-model prediction exports organized
   as `<root>/<model>/<dataset>.json`. It selects ten distinct-scene samples per dataset
   with strict Free3D correctness evidence, requires semantic approval for Scan2Cap,
-  and writes individual reports, 2x5 grids, manifests, and an HTML gallery.
+  and writes individual reports, lightweight 2x5 PNG previews, vector-text paper
+  PDFs, manifests, and an HTML gallery.
 
 ## Static Report Style
 

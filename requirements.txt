@@ -5,3 +5,5 @@ plotly>=5.18
 pillow>=10.0
 requests>=2.31
 scipy>=1.10
+reportlab>=4.2
+pypdf>=4.3

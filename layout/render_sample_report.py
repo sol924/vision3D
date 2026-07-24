@@ -182,6 +182,24 @@ def parse_args() -> argparse.Namespace:
         default="times",
         help="Font family for the left text block and bbox legend.",
     )
+    parser.add_argument(
+        "--scene-scale",
+        type=float,
+        default=1.0,
+        help=(
+            "Internal scene-render scale relative to the right panel. "
+            "The final report dimensions and text resolution are unchanged."
+        ),
+    )
+    parser.add_argument(
+        "--scene-colors",
+        type=int,
+        default=0,
+        help=(
+            "Maximum colors used in the scene panel after resizing. "
+            "Use 0 to preserve full RGB color."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -579,6 +597,16 @@ def trim_scene_whitespace(image: Image.Image, padding: int = 34) -> Image.Image:
     return image.crop((x0, y0, x1 + 1, y1 + 1))
 
 
+def quantize_scene(image: Image.Image, colors: int) -> Image.Image:
+    if colors <= 0:
+        return image.convert("RGB")
+    return image.convert("RGB").quantize(
+        colors=colors,
+        method=Image.Quantize.MEDIANCUT,
+        dither=Image.Dither.NONE,
+    ).convert("RGB")
+
+
 def choose_camera(
     points: np.ndarray,
     colors: np.ndarray,
@@ -837,6 +865,7 @@ def render_report(
     renderer_name: str,
     scene_kind: str,
     style: ReportStyle,
+    scene_colors: int = 0,
 ) -> None:
     width, height = size
     canvas = Image.new("RGB", size, WHITE)
@@ -864,15 +893,23 @@ def render_report(
         y = draw_section(draw, left_x, y, text_w, label, body, accent, style)
     draw_bbox_legend(draw, left_x, y - 4, legend_items, style)
 
-    scene = trim_scene_whitespace(scene_image).resize((right_w, right_h), Image.Resampling.LANCZOS)
+    scene = trim_scene_whitespace(scene_image).resize(
+        (right_w, right_h),
+        Image.Resampling.LANCZOS,
+    )
+    scene = quantize_scene(scene, scene_colors)
     canvas.paste(scene, (right_x, right_y))
 
     output_png.parent.mkdir(parents=True, exist_ok=True)
-    canvas.save(output_png)
+    canvas.save(output_png, optimize=True, compress_level=9)
 
 
 def main() -> int:
     args = parse_args()
+    if not 0 < args.scene_scale <= 1:
+        raise ValueError("--scene-scale must be greater than 0 and at most 1")
+    if args.scene_colors < 0 or args.scene_colors > 256:
+        raise ValueError("--scene-colors must be between 0 and 256")
     package_json = resolve_path(args.sample_package_json)
     package = load_json(package_json)
     output_png = (
@@ -885,14 +922,25 @@ def main() -> int:
     boxes = collect_boxes(package)
     camera = choose_camera(points, colors, boxes, faces if scene_kind == "mesh" else None)
     style = build_style(args.text_preset, args.font_family)
-    scene_size = (
+    scene_panel_size = (
         args.width - style.right_x - style.right_margin,
         args.height - style.right_y - style.bottom_margin,
+    )
+    scene_render_size = (
+        max(1, round(scene_panel_size[0] * args.scene_scale)),
+        max(1, round(scene_panel_size[1] * args.scene_scale)),
     )
     renderer_name = "matplotlib"
     scene_image = None
     if args.renderer in ("auto", "open3d"):
-        scene_image = try_render_open3d(points, colors, faces, boxes, scene_size, camera)
+        scene_image = try_render_open3d(
+            points,
+            colors,
+            faces,
+            boxes,
+            scene_render_size,
+            camera,
+        )
         if scene_image is not None:
             renderer_name = "open3d"
     if scene_image is None:
@@ -902,7 +950,7 @@ def main() -> int:
             points,
             colors,
             boxes,
-            size=scene_size,
+            size=scene_render_size,
             elev=camera["elev"],
             azim=camera["azim"],
             max_points=args.max_points,
@@ -918,6 +966,7 @@ def main() -> int:
         renderer_name=renderer_name,
         scene_kind=scene_kind,
         style=style,
+        scene_colors=args.scene_colors,
     )
     summary = {
         "report_png": str(output_png.relative_to(REPO_ROOT) if output_png.is_relative_to(REPO_ROOT) else output_png),
@@ -926,6 +975,10 @@ def main() -> int:
         "renderer": renderer_name,
         "text_preset": args.text_preset,
         "font_family": args.font_family,
+        "scene_scale": args.scene_scale,
+        "scene_render_size": list(scene_render_size),
+        "scene_panel_size": list(scene_panel_size),
+        "scene_colors": args.scene_colors,
         "camera": camera,
     }
     print(json.dumps(summary, indent=2, ensure_ascii=False))

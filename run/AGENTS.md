@@ -34,7 +34,8 @@ matching Python module.
   when missing ScanNet scenes should fail instead of being downloaded.
 - `bash run/render_4mllm_correct_samples.sh ...`: selects and renders ten strictly
   correct, distinct-scene samples for each of four MLLMs and five datasets, producing
-  individual PNG reports, 2x5 grids, a selection audit, and an HTML gallery.
+  individual PNG reports, <=1 MiB 2x5 PNG previews, vector-text paper PDFs, a
+  selection audit, and an HTML gallery.
 
 ## Typical Usage
 

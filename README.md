@@ -85,3 +85,11 @@ The command applies the strict Free3D correctness definitions: ScanRefer
 `Acc@0.50`, Multi3DRef `F1@0.50=1`, cleaned exact-match QA/SQA answers, and
 Scan2Cap bbox IoU at least 0.5 plus semantic review. It writes 200 individual
 reports, twenty 2x5 grids, a selection audit, and an HTML gallery.
+
+The four-model workflow defaults to paper-friendly lightweight output. The 3D
+scene is rendered at 50% of the right-panel width and height while the text
+canvas remains at full resolution. Each 2x5 grid has a selectable-vector-text
+PDF under `pdf/` and a PNG preview under `grids/` that is guaranteed not to
+exceed 1 MiB. Override these defaults with `--scene-scale`,
+`--scene-colors`, `--grid-preview-width`, or
+`--grid-preview-max-bytes`.

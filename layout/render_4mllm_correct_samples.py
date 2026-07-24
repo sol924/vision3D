@@ -3,10 +3,12 @@ from __future__ import annotations
 import argparse
 import hashlib
 import html
+import io
 import json
 import math
 import os
 import re
+import shutil
 import subprocess
 import sys
 from collections import defaultdict
@@ -16,7 +18,12 @@ from typing import Any
 
 import numpy as np
 import torch
-from PIL import Image
+from PIL import Image, ImageDraw
+from reportlab.lib import colors as pdf_colors
+from reportlab.lib.units import inch
+from reportlab.lib.utils import ImageReader
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfgen import canvas as pdf_canvas
 from scipy.optimize import linear_sum_assignment
 
 
@@ -29,6 +36,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from point.visualize_input_tokens_mesh import load_scene_mesh, write_colored_mesh
+from layout import render_sample_report as report_layout
 
 
 DEFAULT_MODELS = ("qwen2_7b", "llava7b", "qwen3_8b", "llama3_8b")
@@ -103,6 +111,38 @@ def parse_args() -> argparse.Namespace:
         default="a4-2x6",
     )
     parser.add_argument("--font-family", choices=("times", "arial"), default="times")
+    parser.add_argument(
+        "--scene-scale",
+        type=float,
+        default=0.5,
+        help=(
+            "Internal scene-render scale. Text and final tile dimensions stay unchanged."
+        ),
+    )
+    parser.add_argument(
+        "--scene-colors",
+        type=int,
+        default=256,
+        help="Maximum scene-panel colors; use 0 for full RGB.",
+    )
+    parser.add_argument(
+        "--grid-preview-width",
+        type=int,
+        default=2000,
+        help="Preferred width for each lightweight grid PNG.",
+    )
+    parser.add_argument(
+        "--grid-preview-max-bytes",
+        type=int,
+        default=1024 * 1024,
+        help="Hard byte limit for every grid PNG.",
+    )
+    parser.add_argument(
+        "--pdf-page-width",
+        type=float,
+        default=7.0,
+        help="Paper-grid PDF width in inches; height follows the grid aspect ratio.",
+    )
     parser.add_argument("--max-points", type=int, default=80000)
     parser.add_argument("--workers", type=int, default=2)
     parser.add_argument("--gt-attr-file", default="scannet_val_attributes.pt")
@@ -779,7 +819,22 @@ def render_tile(
     args: argparse.Namespace,
 ) -> dict[str, Any]:
     if output_png.is_file() and output_png.stat().st_size > 0 and not args.force:
-        return {"report_png": str(output_png), "reused": True}
+        style = report_layout.build_style(args.text_preset, args.font_family)
+        scene_panel_size = [
+            args.width - style.right_x - style.right_margin,
+            args.height - style.right_y - style.bottom_margin,
+        ]
+        return {
+            "report_png": str(output_png),
+            "reused": True,
+            "scene_scale": args.scene_scale,
+            "scene_render_size": [
+                max(1, round(scene_panel_size[0] * args.scene_scale)),
+                max(1, round(scene_panel_size[1] * args.scene_scale)),
+            ],
+            "scene_panel_size": scene_panel_size,
+            "scene_colors": args.scene_colors,
+        }
     environment = os.environ.copy()
     environment.setdefault(
         "MPLCONFIGDIR",
@@ -806,6 +861,10 @@ def render_tile(
             args.text_preset,
             "--font-family",
             args.font_family,
+            "--scene-scale",
+            str(args.scene_scale),
+            "--scene-colors",
+            str(args.scene_colors),
         ],
         cwd=REPO_ROOT,
         env=environment,
@@ -821,34 +880,315 @@ def render_tile(
     )
 
 
-def stitch_grid(
+def write_grid_preview(
     tile_paths: list[Path],
     output_png: Path,
     cols: int,
     rows: int,
-) -> None:
+    preferred_width: int,
+    max_bytes: int,
+) -> dict[str, Any]:
     if len(tile_paths) != cols * rows:
         raise ValueError(f"Expected {cols * rows} tiles, got {len(tile_paths)}")
     images = [Image.open(path).convert("RGB") for path in tile_paths]
     try:
         tile_width, tile_height = images[0].size
-        canvas = Image.new("RGB", (cols * tile_width, rows * tile_height), "white")
-        for index, image in enumerate(images):
-            if image.size != (tile_width, tile_height):
-                image = image.resize(
-                    (tile_width, tile_height),
+        width_candidates = list(
+            dict.fromkeys(
+                max(cols * 480, round(preferred_width * ratio))
+                for ratio in (1.0, 0.9, 0.8, 0.7, 0.6)
+            )
+        )
+        color_candidates = (256, 192, 128, 96, 64, 48, 32)
+        for requested_width in width_candidates:
+            cell_width = max(1, requested_width // cols)
+            cell_height = max(1, round(tile_height * cell_width / tile_width))
+            canvas_size = (cell_width * cols, cell_height * rows)
+            canvas = Image.new("RGB", canvas_size, "white")
+            for index, image in enumerate(images):
+                resized = image.resize(
+                    (cell_width, cell_height),
                     Image.Resampling.LANCZOS,
                 )
-            canvas.paste(
-                image,
-                ((index % cols) * tile_width, (index // cols) * tile_height),
-            )
-        output_png.parent.mkdir(parents=True, exist_ok=True)
-        canvas.save(output_png)
-        canvas.close()
+                canvas.paste(
+                    resized,
+                    (
+                        (index % cols) * cell_width,
+                        (index // cols) * cell_height,
+                    ),
+                )
+                resized.close()
+
+            for palette_colors in color_candidates:
+                compact = canvas.quantize(
+                    colors=palette_colors,
+                    method=Image.Quantize.MEDIANCUT,
+                    dither=Image.Dither.NONE,
+                )
+                buffer = io.BytesIO()
+                compact.save(
+                    buffer,
+                    format="PNG",
+                    optimize=True,
+                    compress_level=9,
+                )
+                compact.close()
+                data = buffer.getvalue()
+                if len(data) <= max_bytes:
+                    output_png.parent.mkdir(parents=True, exist_ok=True)
+                    temporary = output_png.with_name(f".{output_png.name}.tmp")
+                    temporary.write_bytes(data)
+                    os.replace(temporary, output_png)
+                    canvas.close()
+                    return {
+                        "size": list(canvas_size),
+                        "palette_colors": palette_colors,
+                        "bytes": len(data),
+                        "max_bytes": max_bytes,
+                    }
+            canvas.close()
+        raise RuntimeError(
+            f"Could not keep grid preview under {max_bytes} bytes: {output_png}"
+        )
     finally:
         for image in images:
             image.close()
+
+
+def pdf_safe_text(text: Any) -> str:
+    return (
+        str(text)
+        .replace("\u2011", "-")
+        .replace("\u2013", "-")
+        .replace("\u2014", "-")
+    )
+
+
+def pdf_text_layout(
+    package: dict[str, Any],
+    size: tuple[int, int],
+    style: report_layout.ReportStyle,
+) -> tuple[
+    list[tuple[str, int, int, bool]],
+    list[tuple[str, str]],
+    int,
+    report_layout.ReportStyle,
+]:
+    width, height = size
+    draw = ImageDraw.Draw(Image.new("RGB", (4, 4), "white"))
+    right_h = height - style.right_y - style.bottom_margin
+    sections = [
+        ("Instruction", package.get("input_text", "")),
+        ("GT", ", ".join(package.get("gt_answer", []))),
+        ("PREDICTION", package.get("model_prediction", "")),
+    ]
+    legend_items = report_layout.collect_legend_items(package)
+    fitted = report_layout.fit_text_style(
+        draw,
+        style.text_w,
+        right_h,
+        [(label, body, "") for label, body in sections],
+        legend_items,
+        style,
+    )
+    total_text_h = report_layout.text_block_height(
+        draw,
+        fitted.text_w,
+        [(label, body, "") for label, body in sections],
+        legend_items,
+        fitted,
+    )
+    y = fitted.right_y + max((right_h - total_text_h) // 2, 0)
+    commands: list[tuple[str, int, int, bool]] = []
+    for label, body in sections:
+        commands.append((label, fitted.left_x, y, True))
+        y += fitted.section_label_gap
+        body_font = report_layout.font(
+            fitted.text_size,
+            family=fitted.font_family,
+        )
+        for line in report_layout.wrap_text(
+            draw,
+            pdf_safe_text(body),
+            body_font,
+            fitted.text_w,
+        ):
+            commands.append((line, fitted.left_x, y, False))
+            y += fitted.line_step
+        y += fitted.section_bottom_gap
+    return commands, legend_items, y - 4, fitted
+
+
+def write_grid_pdf(
+    records: list[dict[str, Any]],
+    output_pdf: Path,
+    cols: int,
+    rows: int,
+    tile_size: tuple[int, int],
+    text_preset: str,
+    font_family: str,
+    scene_scale: float,
+    scene_colors: int,
+    page_width_inches: float,
+    title: str,
+) -> dict[str, Any]:
+    if len(records) != cols * rows:
+        raise ValueError(f"Expected {cols * rows} records, got {len(records)}")
+
+    tile_width, tile_height = tile_size
+    page_width = page_width_inches * inch
+    page_height = page_width * rows * tile_height / (cols * tile_width)
+    cell_width = page_width / cols
+    cell_height = page_height / rows
+    scale_x = cell_width / tile_width
+    scale_y = cell_height / tile_height
+    base_style = report_layout.build_style(text_preset, font_family)
+    regular_font = "Times-Roman" if font_family == "times" else "Helvetica"
+    bold_font = "Times-Bold" if font_family == "times" else "Helvetica-Bold"
+
+    output_pdf.parent.mkdir(parents=True, exist_ok=True)
+    temporary = output_pdf.with_name(f".{output_pdf.name}.tmp")
+    page = pdf_canvas.Canvas(
+        str(temporary),
+        pagesize=(page_width, page_height),
+        pageCompression=1,
+    )
+    page.setTitle(pdf_safe_text(title))
+    page.setAuthor("vision3D")
+
+    for index, record in enumerate(records):
+        row = index // cols
+        col = index % cols
+        cell_left = col * cell_width
+        cell_top = page_height - row * cell_height
+        package = load_json(Path(record["package_json"]))
+
+        right_w = tile_width - base_style.right_x - base_style.right_margin
+        right_h = tile_height - base_style.right_y - base_style.bottom_margin
+        scene_box = (
+            base_style.right_x,
+            base_style.right_y,
+            base_style.right_x + right_w,
+            base_style.right_y + right_h,
+        )
+        with Image.open(record["tile_png"]).convert("RGB") as tile:
+            scene = tile.crop(scene_box).resize(
+                (
+                    max(1, round(right_w * scene_scale)),
+                    max(1, round(right_h * scene_scale)),
+                ),
+                Image.Resampling.LANCZOS,
+            )
+        if scene_colors > 0:
+            scene = scene.quantize(
+                colors=scene_colors,
+                method=Image.Quantize.MEDIANCUT,
+                dither=Image.Dither.NONE,
+            )
+        scene_buffer = io.BytesIO()
+        scene.save(
+            scene_buffer,
+            format="PNG",
+            optimize=True,
+            compress_level=9,
+        )
+        scene.close()
+        page.drawImage(
+            ImageReader(io.BytesIO(scene_buffer.getvalue())),
+            cell_left + base_style.right_x * scale_x,
+            cell_top - (base_style.right_y + right_h) * scale_y,
+            width=right_w * scale_x,
+            height=right_h * scale_y,
+            preserveAspectRatio=False,
+            mask="auto",
+        )
+
+        commands, legend_items, legend_y, fitted = pdf_text_layout(
+            package,
+            tile_size,
+            base_style,
+        )
+        font_size = fitted.text_size * scale_y
+        for text_value, logical_x, logical_y, bold in commands:
+            font_name = bold_font if bold else regular_font
+            page.setFont(font_name, font_size)
+            page.setFillColor(pdf_colors.black)
+            ascent = pdfmetrics.getAscent(font_name) / 1000.0 * font_size
+            page.drawString(
+                cell_left + logical_x * scale_x,
+                cell_top - logical_y * scale_y - ascent,
+                pdf_safe_text(text_value),
+            )
+
+        cursor_x = cell_left + fitted.left_x * scale_x
+        legend_font_size = fitted.text_size * scale_y
+        legend_ascent = (
+            pdfmetrics.getAscent(regular_font) / 1000.0 * legend_font_size
+        )
+        for color, label in legend_items:
+            line_y = cell_top - (
+                legend_y + fitted.legend_line_y
+            ) * scale_y
+            page.setStrokeColor(pdf_colors.HexColor(color))
+            page.setLineWidth(max(0.5, fitted.legend_line_width * scale_y))
+            page.line(
+                cursor_x,
+                line_y,
+                cursor_x + fitted.legend_line_w * scale_x,
+                line_y,
+            )
+            label_x = (
+                cursor_x
+                + fitted.legend_line_w * scale_x
+                + fitted.legend_text_gap * scale_x
+            )
+            page.setFillColor(pdf_colors.black)
+            page.setFont(regular_font, legend_font_size)
+            page.drawString(
+                label_x,
+                cell_top - legend_y * scale_y - legend_ascent,
+                pdf_safe_text(label),
+            )
+            cursor_x = (
+                label_x
+                + pdfmetrics.stringWidth(
+                    pdf_safe_text(label),
+                    regular_font,
+                    legend_font_size,
+                )
+                + fitted.legend_line_w * 0.55 * scale_x
+            )
+
+    page.showPage()
+    page.save()
+    os.replace(temporary, output_pdf)
+    return {
+        "page_size_inches": [
+            page_width / inch,
+            page_height / inch,
+        ],
+        "bytes": output_pdf.stat().st_size,
+        "vector_text": True,
+        "scene_scale": scene_scale,
+        "scene_render_size": [
+            max(1, round(
+                (
+                    tile_width
+                    - base_style.right_x
+                    - base_style.right_margin
+                )
+                * scene_scale
+            )),
+            max(1, round(
+                (
+                    tile_height
+                    - base_style.right_y
+                    - base_style.bottom_margin
+                )
+                * scene_scale
+            )),
+        ],
+    }
 
 
 def relative_href(path: Path, root: Path) -> str:
@@ -878,6 +1218,7 @@ def write_gallery(manifest: dict[str, Any], output_dir: Path) -> Path:
         for dataset in model["datasets"]:
             dataset_name = dataset["dataset"]
             grid_path = Path(dataset["grid_png"])
+            pdf_path = Path(dataset["grid_pdf"])
             cards: list[str] = []
             for record in dataset["records"]:
                 tile_path = Path(record["tile_png"])
@@ -901,6 +1242,9 @@ def write_gallery(manifest: dict[str, Any], output_dir: Path) -> Path:
                 f"""
                 <section class="dataset" id="{html.escape(model_id)}-{html.escape(dataset_name)}">
                   <h2>{html.escape(dataset_name)}</h2>
+                  <p class="paper-link">
+                    <a href="{relative_href(pdf_path, output_dir)}">Download paper PDF</a>
+                  </p>
                   <a class="grid-link" href="{relative_href(grid_path, output_dir)}">
                     <img loading="lazy" src="{relative_href(grid_path, output_dir)}"
                          alt="{html.escape(model_label)} {html.escape(dataset_name)} grid">
@@ -935,6 +1279,8 @@ def write_gallery(manifest: dict[str, Any], output_dir: Path) -> Path:
     .model {{ margin-bottom: 80px; }}
     h1 {{ font-family: Georgia, serif; font-size: 38px; margin: 24px 0; }}
     h2 {{ font-size: 24px; margin: 42px 0 16px; text-transform: capitalize; }}
+    .paper-link {{ margin: -8px 0 14px; }}
+    .paper-link a {{ color: #245b82; font-weight: 700; }}
     .grid-link img {{ display: block; width: min(100%, 950px); height: auto; background: white; }}
     .cards {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
               gap: 18px; margin-top: 22px; }}
@@ -975,6 +1321,16 @@ def validate_args(args: argparse.Namespace) -> None:
         raise ValueError("--limit must equal --cols * --rows")
     if args.workers <= 0:
         raise ValueError("--workers must be positive")
+    if not 0 < args.scene_scale <= 1:
+        raise ValueError("--scene-scale must be greater than 0 and at most 1")
+    if args.scene_colors < 0 or args.scene_colors > 256:
+        raise ValueError("--scene-colors must be between 0 and 256")
+    if args.grid_preview_width < args.cols * 480:
+        raise ValueError("--grid-preview-width is too small for readable text")
+    if args.grid_preview_max_bytes <= 0:
+        raise ValueError("--grid-preview-max-bytes must be positive")
+    if args.pdf_page_width <= 0:
+        raise ValueError("--pdf-page-width must be positive")
 
 
 def main() -> int:
@@ -1053,6 +1409,12 @@ def main() -> int:
             f"Scan2Cap semantic review is required: {review_path}. "
             "Run with --prepare-scan2cap-review first."
         )
+    archived_review_path: Path | None = None
+    if "scan2cap" in args.datasets:
+        archived_review_path = output_dir / review_path.name
+        if review_path.resolve() != archived_review_path.resolve():
+            archived_review_path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(review_path, archived_review_path)
 
     selected_map: dict[str, dict[str, list[dict[str, Any]]]] = {}
     for model in args.models:
@@ -1138,17 +1500,28 @@ def main() -> int:
     }
 
     manifest: dict[str, Any] = {
-        "schema_version": 1,
+        "schema_version": 2,
         "prediction_root": str(prediction_root),
         "annotation_root": str(annotation_root),
         "output_dir": str(output_dir),
         "selection_audit": str(output_dir / "selection_audit.json"),
-        "scan2cap_review": str(review_path) if "scan2cap" in args.datasets else None,
+        "scan2cap_review": (
+            str(archived_review_path)
+            if archived_review_path is not None
+            else None
+        ),
         "tile_size": [args.width, args.height],
         "grid": {"cols": args.cols, "rows": args.rows},
         "renderer": args.renderer,
         "text_preset": args.text_preset,
         "font_family": args.font_family,
+        "scene_scale": args.scene_scale,
+        "scene_colors": args.scene_colors,
+        "grid_preview": {
+            "preferred_width": args.grid_preview_width,
+            "max_bytes": args.grid_preview_max_bytes,
+        },
+        "pdf_page_width_inches": args.pdf_page_width,
         "models": [],
     }
     render_jobs: list[tuple[Path, Path, dict[str, Any]]] = []
@@ -1213,11 +1586,18 @@ def main() -> int:
                 / model
                 / f"{dataset}_{args.limit}_grid.png"
             )
+            pdf_path = (
+                output_dir
+                / "pdf"
+                / model
+                / f"{dataset}_{args.limit}_grid.pdf"
+            )
             model_manifest["datasets"].append(
                 {
                     "dataset": dataset,
                     "records": records,
                     "grid_png": str(grid_path),
+                    "grid_pdf": str(pdf_path),
                 }
             )
         manifest["models"].append(model_manifest)
@@ -1244,8 +1624,38 @@ def main() -> int:
                 for record in dataset_manifest["records"]
             ]
             grid_path = Path(dataset_manifest["grid_png"])
-            stitch_grid(tile_paths, grid_path, args.cols, args.rows)
-            print(f"grid: {grid_path}")
+            preview_info = write_grid_preview(
+                tile_paths,
+                grid_path,
+                args.cols,
+                args.rows,
+                args.grid_preview_width,
+                args.grid_preview_max_bytes,
+            )
+            dataset_manifest["grid_preview_info"] = preview_info
+            print(
+                f"grid preview: {grid_path} "
+                f"({preview_info['bytes']} bytes)"
+            )
+            pdf_path = Path(dataset_manifest["grid_pdf"])
+            pdf_info = write_grid_pdf(
+                dataset_manifest["records"],
+                pdf_path,
+                args.cols,
+                args.rows,
+                (args.width, args.height),
+                args.text_preset,
+                args.font_family,
+                args.scene_scale,
+                args.scene_colors,
+                args.pdf_page_width,
+                (
+                    f"{model_manifest['model_label']} - "
+                    f"{dataset_manifest['dataset']}"
+                ),
+            )
+            dataset_manifest["pdf_info"] = pdf_info
+            print(f"paper PDF: {pdf_path} ({pdf_info['bytes']} bytes)")
 
     write_json(output_dir / "manifest.json", manifest)
     gallery_path = write_gallery(manifest, output_dir)
@@ -1255,6 +1665,10 @@ def main() -> int:
         "gallery": str(gallery_path),
         "tiles": len(render_jobs),
         "grids": sum(
+            len(model_manifest["datasets"])
+            for model_manifest in manifest["models"]
+        ),
+        "pdfs": sum(
             len(model_manifest["datasets"])
             for model_manifest in manifest["models"]
         ),

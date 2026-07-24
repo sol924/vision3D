@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import os
+import json
+import tempfile
 import unittest
 from pathlib import Path
 
 import numpy as np
 import torch
+from PIL import Image, ImageChops, ImageDraw
+from pypdf import PdfReader
 
 
 os.environ.setdefault(
@@ -17,7 +21,10 @@ from layout.render_4mllm_correct_samples import (
     axis_aligned_iou,
     evaluate_prediction,
     grouped_unique_rows,
+    write_grid_pdf,
+    write_grid_preview,
 )
+from layout.render_sample_report import build_style, render_report
 
 
 def attributes(locs: list[list[float]]) -> dict:
@@ -131,6 +138,121 @@ class CorrectSampleSelectionTests(unittest.TestCase):
         unique, duplicate_records = grouped_unique_rows(rows)
         self.assertEqual(len(unique), 1)
         self.assertEqual(duplicate_records, 2)
+
+
+class LightweightOutputTests(unittest.TestCase):
+    def sample_package(self) -> dict:
+        return {
+            "input_text": "What color is the chair?",
+            "gt_answer": ["brown"],
+            "model_prediction": "Brown.",
+            "gt_bbox_locs": [],
+            "model_pred_bbox_locs": [],
+        }
+
+    def test_scene_compression_keeps_text_pixels_unchanged(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_dir:
+            root = Path(temporary_dir)
+            package = self.sample_package()
+            style = build_style("compact", "times")
+            full_scene = Image.new("RGB", (1168, 1020), "white")
+            draw = ImageDraw.Draw(full_scene)
+            draw.rectangle((180, 160, 960, 860), fill=(116, 92, 64))
+            small_scene = full_scene.resize((584, 510), Image.Resampling.LANCZOS)
+            full_path = root / "full.png"
+            compact_path = root / "compact.png"
+            render_report(
+                package,
+                full_scene,
+                full_path,
+                (1800, 1100),
+                {},
+                "matplotlib",
+                "mesh",
+                style,
+                scene_colors=0,
+            )
+            render_report(
+                package,
+                small_scene,
+                compact_path,
+                (1800, 1100),
+                {},
+                "matplotlib",
+                "mesh",
+                style,
+                scene_colors=64,
+            )
+            with Image.open(full_path) as full, Image.open(compact_path) as compact:
+                left_box = (0, 0, style.right_x, 1100)
+                difference = ImageChops.difference(
+                    full.crop(left_box),
+                    compact.crop(left_box),
+                )
+                self.assertIsNone(difference.getbbox())
+
+    def test_grid_preview_obeys_hard_byte_limit(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_dir:
+            root = Path(temporary_dir)
+            tile_path = root / "tile.png"
+            tile = Image.new("RGB", (320, 150), "white")
+            draw = ImageDraw.Draw(tile)
+            draw.text((10, 20), "Instruction GT PREDICTION", fill="black")
+            draw.rectangle((170, 20, 310, 140), fill=(118, 91, 62))
+            tile.save(tile_path)
+            output_path = root / "grid.png"
+            info = write_grid_preview(
+                [tile_path] * 10,
+                output_path,
+                cols=2,
+                rows=5,
+                preferred_width=1000,
+                max_bytes=100_000,
+            )
+            self.assertLessEqual(info["bytes"], 100_000)
+            self.assertEqual(output_path.stat().st_size, info["bytes"])
+
+    def test_grid_pdf_contains_vector_text(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_dir:
+            root = Path(temporary_dir)
+            package_path = root / "sample_package.json"
+            package_path.write_text(
+                json.dumps(self.sample_package()),
+                encoding="utf-8",
+            )
+            tile_path = root / "tile.png"
+            tile = Image.new("RGB", (1800, 1100), "white")
+            draw = ImageDraw.Draw(tile)
+            draw.rectangle((590, 40, 1758, 1060), fill=(118, 91, 62))
+            tile.save(tile_path)
+            records = [
+                {
+                    "package_json": str(package_path),
+                    "tile_png": str(tile_path),
+                }
+                for _ in range(10)
+            ]
+            output_path = root / "grid.pdf"
+            info = write_grid_pdf(
+                records,
+                output_path,
+                cols=2,
+                rows=5,
+                tile_size=(1800, 1100),
+                text_preset="compact",
+                font_family="times",
+                scene_scale=0.5,
+                scene_colors=64,
+                page_width_inches=7.0,
+                title="Test grid",
+            )
+            reader = PdfReader(output_path)
+            self.assertEqual(len(reader.pages), 1)
+            text = reader.pages[0].extract_text()
+            self.assertIn("Instruction", text)
+            self.assertIn("PREDICTION", text)
+            self.assertTrue(info["vector_text"])
+            self.assertGreater(output_path.stat().st_size, 0)
 
 
 if __name__ == "__main__":
