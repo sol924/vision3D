@@ -25,6 +25,9 @@ bounding boxes when metadata and annotation files are available.
   grids using correctly predicted samples by default. It prioritizes cached scenes and
   shorter complete text among correct samples, renders per-sample tiles, and stitches
   one large figure per dataset.
+- `compact_dataset_grids.py`: creates paper-friendly indexed PNG copies of existing
+  dataset grids. It preserves the original canvas and text layout, reduces only the
+  scene panels, and enforces a hard total-byte limit before publishing any outputs.
 - `render_4mllm_correct_samples.py`: renders four-model prediction exports organized
   as `<root>/<model>/<dataset>.json`. It selects ten distinct-scene samples per dataset
   with strict Free3D correctness evidence, requires semantic approval for Scan2Cap,

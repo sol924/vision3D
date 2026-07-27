@@ -59,6 +59,19 @@ This command uses the `a4-2x6` text preset and Times-style font by default so ea
 dataset grid can be placed on an A4 paper page more clearly. The default tile size is
 `3200x1500`, producing `6400x9000` grids with complete text and one-line bbox legends.
 
+To preserve those five grids while producing paper-friendly indexed PNG copies whose
+combined size does not exceed 5,000,000 bytes:
+
+```bash
+/Users/sol/Research/Training_Free_Token_Redcution/.venv/bin/python \
+  layout/compact_dataset_grids.py \
+  --manifest "/Volumes/T7 Shield/point_reduction_data/ours/visualization_0625_best_02/manifest.json"
+```
+
+The compact copies are written to `grids_compact/`. The default settings keep the
+original `6400x9000` canvas and text geometry, render each scene panel at 25% scale
+with 32 colors, and store the final grid as a 256-color indexed PNG.
+
 To render four MLLMs independently with ten strictly correct local samples per
 dataset, first create and complete the Scan2Cap semantic-review file:
 
